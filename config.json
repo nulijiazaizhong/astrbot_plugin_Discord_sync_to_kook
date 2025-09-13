@@ -1,0 +1,10 @@
+{
+  "enabled": true,
+  "discord_platform_id": "1177621357064892528",
+  "kook_platform_id": "2594708157375001",
+  "forward_channels": {},
+  "forward_all_channels": true,
+  "default_kook_channel": "3467992097213849",
+  "include_bot_messages": false,
+  "message_prefix": "[Discord] "
+}

@@ -44,5 +44,10 @@
     "type": "int",
     "default": 24,
     "description": "图片文件自动清理时间（小时），设置为0表示不自动清理"
+  },
+  "video_cleanup_hours": {
+    "type": "int",
+    "default": 24,
+    "description": "视频文件自动清理时间（小时），设置为0表示不自动清理"
   }
 }

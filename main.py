@@ -1,7 +1,7 @@
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
-from astrbot.api.message_components import Plain, Image, At, AtAll
+from astrbot.api.message_components import Plain, Image, Video, At, AtAll
 from astrbot.core.message.message_event_result import MessageChain
 from astrbot.core.platform.message_session import MessageSesion
 from astrbot.core.platform.message_type import MessageType
@@ -65,24 +65,115 @@ class DiscordToKookForwarder(Star):
 
     async def _load_config(self):
         """加载插件配置"""
-        # 配置已在__init__中加载
-        pass
+        try:
+            # 尝试从config.json文件加载配置
+            from pathlib import Path
+            
+            plugin_dir = Path(__file__).parent
+            config_file = plugin_dir / "config.json"
+            
+            if config_file.exists():
+                with open(config_file, 'r', encoding='utf-8') as f:
+                    file_config = json.load(f)
+                
+                # 合并配置（文件配置优先）
+                self.config.update(file_config)
+                logger.info(f"✅ 从文件加载配置成功: {list(file_config.keys())}")
+            else:
+                logger.info("📄 配置文件不存在，使用默认配置")
+                
+            # 同步WebUI配置到内存和文件
+            await self._sync_webui_config()
+                
+        except Exception as e:
+            logger.warning(f"⚠️ 加载配置文件失败: {e}，使用默认配置")
+    
+    async def _sync_webui_config(self):
+        """同步WebUI配置到内存和config.json文件"""
+        try:
+            # 如果有plugin_config对象，从中读取最新配置
+            if self.plugin_config:
+                webui_config = {}
+                
+                # 尝试读取WebUI中的配置
+                config_keys = [
+                    'enabled', 'discord_platform_id', 'kook_platform_id',
+                    'forward_channels', 'forward_all_channels', 'default_kook_channel',
+                    'include_bot_messages', 'message_prefix', 'image_cleanup_hours',
+                    'video_cleanup_hours'
+                ]
+                
+                for key in config_keys:
+                    try:
+                        if hasattr(self.plugin_config, '__getitem__'):
+                            value = self.plugin_config.get(key)
+                        elif hasattr(self.plugin_config, key):
+                            value = getattr(self.plugin_config, key)
+                        else:
+                            continue
+                            
+                        if value is not None:
+                            webui_config[key] = value
+                    except Exception:
+                        continue
+                
+                # 如果从WebUI读取到配置，更新内存配置
+                if webui_config:
+                    old_config = self.config.copy()
+                    self.config.update(webui_config)
+                    
+                    # 检查配置是否有变化
+                    if old_config != self.config:
+                        logger.info(f"🔄 检测到WebUI配置变更，同步到config.json")
+                        self._save_config()
+                    else:
+                        logger.debug("📋 WebUI配置无变化")
+                        
+        except Exception as e:
+            logger.warning(f"⚠️ 同步WebUI配置失败: {e}")
     
     def _save_config(self):
         """保存插件配置到文件"""
         try:
-            if self.plugin_config and hasattr(self.plugin_config, 'save'):
-                # 更新配置对象
-                for key, value in self.config.items():
-                    if hasattr(self.plugin_config, '__setitem__'):
-                        self.plugin_config[key] = value
-                    else:
-                        setattr(self.plugin_config, key, value)
-                # 保存到文件
-                self.plugin_config.save()
-                logger.info("✅ 插件配置已保存")
-            else:
-                logger.warning("❌ 无法获取插件配置实例或配置对象不支持保存，配置未保存")
+            # 尝试多种方式保存配置
+            saved = False
+            
+            # 方式1：使用plugin_config对象
+            if self.plugin_config:
+                try:
+                    # 更新配置对象
+                    for key, value in self.config.items():
+                        if hasattr(self.plugin_config, '__setitem__'):
+                            self.plugin_config[key] = value
+                        elif hasattr(self.plugin_config, key):
+                            setattr(self.plugin_config, key, value)
+                    
+                    # 尝试保存
+                    if hasattr(self.plugin_config, 'save'):
+                        self.plugin_config.save()
+                        saved = True
+                        logger.info("✅ 插件配置已保存（方式1）")
+                except Exception as e:
+                    logger.warning(f"⚠️ 方式1保存失败: {e}")
+            
+            # 方式2：直接写入配置文件（始终执行，确保WebUI配置同步）
+            try:
+                import os
+                from pathlib import Path
+                
+                plugin_dir = Path(__file__).parent
+                config_file = plugin_dir / "config.json"
+                
+                with open(config_file, 'w', encoding='utf-8') as f:
+                    json.dump(self.config, f, ensure_ascii=False, indent=2)
+                
+                saved = True
+                logger.info("✅ 插件配置已同步到config.json")
+            except Exception as e:
+                logger.warning(f"⚠️ 同步config.json失败: {e}")
+            
+            if not saved:
+                logger.warning("❌ 所有配置保存方式都失败，配置未保存")
         except Exception as e:
             logger.error(f"❌ 保存插件配置失败: {e}")
             import traceback
@@ -132,6 +223,9 @@ class DiscordToKookForwarder(Star):
         """监听Discord消息并转发到Kook"""
         try:
             logger.info(f"🔔 接收到Discord消息: 发送者={event.get_sender_name()}, 内容='{event.message_str}', 平台={event.get_platform_name()}")
+            
+            # 每次处理消息前同步WebUI配置
+            await self._sync_webui_config()
             
             if not self.config["enabled"]:
                 logger.info("❌ 转发功能已禁用，跳过消息")
@@ -302,6 +396,52 @@ class DiscordToKookForwarder(Star):
                     else:
                         logger.warning("⚠️ 图片组件没有有效的文件URL")
                         await kook_client.send_text(channel_id, "[图片信息缺失]")
+                elif isinstance(component, Video):
+                    # 处理视频消息
+                    video_url = component.file
+                    filename = getattr(component, 'filename', '未知文件名')
+                    
+                    # 从URL中提取实际文件名
+                    from urllib.parse import urlparse
+                    from pathlib import Path
+                    parsed_url = urlparse(video_url)
+                    url_filename = Path(parsed_url.path).name
+                    
+                    # 优先使用URL中的文件名
+                    if url_filename and '.' in url_filename:
+                        display_filename = url_filename
+                    elif filename and filename != '未知文件名':
+                        display_filename = filename
+                    else:
+                        display_filename = 'video.mp4'
+                    
+                    logger.info(f"🎬 检测到视频组件: URL={video_url}, 文件名={display_filename}")
+                    
+                    if video_url:
+                        try:
+                            # 下载Discord视频到本地
+                            local_video_path = await self._download_video(video_url, filename)
+                            if local_video_path:
+                                # 使用本地视频路径发送到Kook
+                                logger.info(f"📤 准备发送本地视频到Kook: {local_video_path}")
+                                success = await kook_client.send_video(channel_id, local_video_path)
+                                if success:
+                                    logger.info(f"✅ 发送视频消息成功: {display_filename}")
+                                else:
+                                    logger.error(f"❌ 发送视频到Kook失败: {display_filename}")
+                                    await kook_client.send_text(channel_id, f"[视频发送失败: {display_filename}]")
+                            else:
+                                logger.error("❌ 视频下载失败")
+                                await kook_client.send_text(channel_id, f"[视频下载失败: {display_filename}]")
+                        except Exception as video_error:
+                            logger.error(f"❌ 发送视频失败: {video_error}")
+                            import traceback
+                            logger.error(traceback.format_exc())
+                            # 如果视频发送失败，发送一个文本提示
+                            await kook_client.send_text(channel_id, f"[视频转发失败: {display_filename}]")
+                    else:
+                        logger.warning("⚠️ 视频组件没有有效的文件URL")
+                        await kook_client.send_text(channel_id, "[视频信息缺失]")
                 else:
                     logger.warning(f"⚠️ 不支持的消息组件类型: {type(component)}")
                     
@@ -309,6 +449,106 @@ class DiscordToKookForwarder(Star):
             logger.error(f"❌ 发送消息到Kook时发生错误: {e}")
             import traceback
             logger.error(traceback.format_exc())
+
+    async def _download_video(self, video_url: str, filename: str) -> str:
+        """下载Discord视频到本地public/video文件夹"""
+        import aiohttp
+        import os
+        import uuid
+        from pathlib import Path
+        from urllib.parse import urlparse
+        
+        try:
+            # 创建public/video目录
+            plugin_dir = Path(__file__).parent
+            video_dir = plugin_dir / "public" / "video"
+            video_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 从URL中提取文件名
+            parsed_url = urlparse(video_url)
+            url_filename = Path(parsed_url.path).name  # 获取路径中的文件名
+            
+            # 如果URL中有文件名，使用它；否则使用传入的filename
+            if url_filename and '.' in url_filename:
+                actual_filename = url_filename
+            elif filename and filename != '未知文件名':
+                actual_filename = filename
+            else:
+                actual_filename = 'video.mp4'
+            
+            logger.info(f"📝 提取的视频文件名: {actual_filename}")
+            
+            # 生成唯一的文件名，保留原始扩展名
+            file_ext = Path(actual_filename).suffix if actual_filename else '.mp4'
+            unique_filename = f"{uuid.uuid4().hex}{file_ext}"
+            local_path = video_dir / unique_filename
+            
+            logger.info(f"📥 开始下载视频: {video_url} -> {local_path}")
+            
+            # 下载视频
+            async with aiohttp.ClientSession() as session:
+                async with session.get(video_url) as response:
+                    if response.status == 200:
+                        with open(local_path, 'wb') as f:
+                            async for chunk in response.content.iter_chunked(8192):
+                                f.write(chunk)
+                        
+                        logger.info(f"✅ 视频下载成功: {local_path}")
+                        
+                        # 下载完成后进行清理
+                        await self._cleanup_old_videos()
+                        
+                        return str(local_path)
+                    else:
+                        logger.error(f"❌ 下载视频HTTP错误: {response.status}")
+                        return None
+                        
+        except Exception as e:
+            logger.error(f"❌ 下载视频异常: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return None
+
+    async def _cleanup_old_videos(self):
+        """根据配置清理旧视频文件"""
+        import os
+        import time
+        from pathlib import Path
+        
+        try:
+            # 获取清理时间配置（小时）
+            cleanup_hours = self.config.get('video_cleanup_hours', 24)
+            
+            # 如果设置为0，则不清理
+            if cleanup_hours <= 0:
+                return
+                
+            plugin_dir = Path(__file__).parent
+            video_dir = plugin_dir / "public" / "video"
+            
+            if not video_dir.exists():
+                return
+                
+            current_time = time.time()
+            cleanup_count = 0
+            cleanup_seconds = cleanup_hours * 3600  # 转换为秒
+            
+            # 清理超过配置时间的视频文件
+            for video_file in video_dir.glob("*"):
+                if video_file.is_file() and video_file.name != ".gitkeep":
+                    file_age = current_time - video_file.stat().st_mtime
+                    if file_age > cleanup_seconds:
+                        try:
+                            video_file.unlink()
+                            cleanup_count += 1
+                        except Exception as e:
+                            logger.warning(f"⚠️ 删除旧视频文件失败: {video_file} - {e}")
+            
+            if cleanup_count > 0:
+                logger.info(f"🧹 清理了 {cleanup_count} 个超过 {cleanup_hours} 小时的旧视频文件")
+                
+        except Exception as e:
+            logger.error(f"❌ 清理旧视频文件异常: {e}")
 
     async def _download_image(self, image_url: str, filename: str) -> str:
         """下载Discord图片到本地public/image文件夹"""
@@ -443,7 +683,9 @@ Kook平台状态: {platform_status}
                 /discord_kook_config toggle_all_channels - 切换是否转发所有频道
                 /discord_kook_config quick_test <kook_channel_id> - 快速测试（启用转发所有频道到指定Kook频道）
                 /discord_kook_config cleanup_images - 立即清理旧图片文件
-                /discord_kook_config set_cleanup_hours <hours> - 设置图片清理时间（小时，0表示不自动清理）"""
+                /discord_kook_config cleanup_videos - 立即清理旧视频文件
+                /discord_kook_config set_cleanup_hours <hours> - 设置图片清理时间（小时，0表示不自动清理）
+                /discord_kook_config set_video_cleanup_hours <hours> - 设置视频清理时间（小时，0表示不自动清理）"""
             yield event.plain_result(config_text)
             return
         
@@ -507,6 +749,10 @@ Kook平台状态: {platform_status}
             # 立即清理旧图片文件
             await self._cleanup_old_images()
             yield event.plain_result("🧹 图片清理完成")
+        elif command == "cleanup_videos":
+            # 立即清理旧视频文件
+            await self._cleanup_old_videos()
+            yield event.plain_result("🧹 视频清理完成")
         elif command == "set_cleanup_hours" and len(args) > 1:
             try:
                 hours = int(args[1])
@@ -519,6 +765,20 @@ Kook平台状态: {platform_status}
                         yield event.plain_result("✅ 已禁用自动图片清理")
                     else:
                         yield event.plain_result(f"✅ 图片清理时间已设置为 {hours} 小时")
+            except ValueError:
+                yield event.plain_result("❌ 请输入有效的小时数")
+        elif command == "set_video_cleanup_hours" and len(args) > 1:
+            try:
+                hours = int(args[1])
+                if hours < 0:
+                    yield event.plain_result("❌ 清理时间不能为负数")
+                else:
+                    self.config["video_cleanup_hours"] = hours
+                    self._save_config()
+                    if hours == 0:
+                        yield event.plain_result("✅ 已禁用自动视频清理")
+                    else:
+                        yield event.plain_result(f"✅ 视频清理时间已设置为 {hours} 小时")
             except ValueError:
                 yield event.plain_result("❌ 请输入有效的小时数")
         else:
