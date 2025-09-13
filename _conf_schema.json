@@ -39,5 +39,10 @@
     "default": {},
     "description": "Discord频道ID到Kook频道ID的映射关系（键为Discord频道ID，值为Kook频道ID）",
     "items": {}
+  },
+  "image_cleanup_hours": {
+    "type": "int",
+    "default": 24,
+    "description": "图片文件自动清理时间（小时），设置为0表示不自动清理"
   }
 }

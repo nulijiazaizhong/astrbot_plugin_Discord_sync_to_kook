@@ -257,8 +257,51 @@ class DiscordToKookForwarder(Star):
                     await kook_client.send_text(channel_id, component.text)
                     logger.info(f"✅ 发送文本消息成功: {component.text[:50]}...")
                 elif isinstance(component, Image):
-                    await kook_client.send_image(channel_id, component.file)
-                    logger.info(f"✅ 发送图片消息成功: {component.file}")
+                    # 处理图片消息
+                    image_url = component.file
+                    filename = getattr(component, 'filename', '未知文件名')
+                    
+                    # 从URL中提取实际文件名
+                    from urllib.parse import urlparse
+                    from pathlib import Path
+                    parsed_url = urlparse(image_url)
+                    url_filename = Path(parsed_url.path).name
+                    
+                    # 优先使用URL中的文件名
+                    if url_filename and '.' in url_filename:
+                        display_filename = url_filename
+                    elif filename and filename != '未知文件名':
+                        display_filename = filename
+                    else:
+                        display_filename = 'image.png'
+                    
+                    logger.info(f"🖼️ 检测到图片组件: URL={image_url}, 文件名={display_filename}")
+                    
+                    if image_url:
+                        try:
+                            # 下载Discord图片到本地
+                            local_image_path = await self._download_image(image_url, filename)
+                            if local_image_path:
+                                # 使用本地图片路径发送到Kook
+                                logger.info(f"📤 准备发送本地图片到Kook: {local_image_path}")
+                                success = await kook_client.send_image(channel_id, local_image_path)
+                                if success:
+                                    logger.info(f"✅ 发送图片消息成功: {display_filename}")
+                                else:
+                                    logger.error(f"❌ 发送图片到Kook失败: {display_filename}")
+                                    await kook_client.send_text(channel_id, f"[图片发送失败: {display_filename}]")
+                            else:
+                                logger.error("❌ 图片下载失败")
+                                await kook_client.send_text(channel_id, f"[图片下载失败: {display_filename}]")
+                        except Exception as img_error:
+                            logger.error(f"❌ 发送图片失败: {img_error}")
+                            import traceback
+                            logger.error(traceback.format_exc())
+                            # 如果图片发送失败，发送一个文本提示
+                            await kook_client.send_text(channel_id, f"[图片转发失败: {display_filename}]")
+                    else:
+                        logger.warning("⚠️ 图片组件没有有效的文件URL")
+                        await kook_client.send_text(channel_id, "[图片信息缺失]")
                 else:
                     logger.warning(f"⚠️ 不支持的消息组件类型: {type(component)}")
                     
@@ -266,6 +309,106 @@ class DiscordToKookForwarder(Star):
             logger.error(f"❌ 发送消息到Kook时发生错误: {e}")
             import traceback
             logger.error(traceback.format_exc())
+
+    async def _download_image(self, image_url: str, filename: str) -> str:
+        """下载Discord图片到本地public/image文件夹"""
+        import aiohttp
+        import os
+        import uuid
+        from pathlib import Path
+        from urllib.parse import urlparse
+        
+        try:
+            # 创建public/image目录
+            plugin_dir = Path(__file__).parent
+            image_dir = plugin_dir / "public" / "image"
+            image_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 从URL中提取文件名
+            parsed_url = urlparse(image_url)
+            url_filename = Path(parsed_url.path).name  # 获取路径中的文件名
+            
+            # 如果URL中有文件名，使用它；否则使用传入的filename
+            if url_filename and '.' in url_filename:
+                actual_filename = url_filename
+            elif filename and filename != '未知文件名':
+                actual_filename = filename
+            else:
+                actual_filename = 'image.png'
+            
+            logger.info(f"📝 提取的文件名: {actual_filename}")
+            
+            # 生成唯一的文件名，保留原始扩展名
+            file_ext = Path(actual_filename).suffix if actual_filename else '.png'
+            unique_filename = f"{uuid.uuid4().hex}{file_ext}"
+            local_path = image_dir / unique_filename
+            
+            logger.info(f"📥 开始下载图片: {image_url} -> {local_path}")
+            
+            # 下载图片
+            async with aiohttp.ClientSession() as session:
+                async with session.get(image_url) as response:
+                    if response.status == 200:
+                        with open(local_path, 'wb') as f:
+                            async for chunk in response.content.iter_chunked(8192):
+                                f.write(chunk)
+                        
+                        logger.info(f"✅ 图片下载成功: {local_path}")
+                        
+                        # 下载完成后进行清理
+                        await self._cleanup_old_images()
+                        
+                        return str(local_path)
+                    else:
+                        logger.error(f"❌ 下载图片HTTP错误: {response.status}")
+                        return None
+                        
+        except Exception as e:
+            logger.error(f"❌ 下载图片异常: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return None
+
+    async def _cleanup_old_images(self):
+        """根据配置清理旧图片文件"""
+        import os
+        import time
+        from pathlib import Path
+        
+        try:
+            # 获取清理时间配置（小时）
+            cleanup_hours = self.config.get('image_cleanup_hours', 24)
+            
+            # 如果设置为0，则不清理
+            if cleanup_hours <= 0:
+                return
+                
+            plugin_dir = Path(__file__).parent
+            image_dir = plugin_dir / "public" / "image"
+            
+            if not image_dir.exists():
+                return
+                
+            current_time = time.time()
+            cleanup_count = 0
+            cleanup_seconds = cleanup_hours * 3600  # 转换为秒
+            
+            # 清理超过配置时间的图片文件
+            for image_file in image_dir.glob("*"):
+                if image_file.is_file() and image_file.name != ".gitkeep":
+                    file_age = current_time - image_file.stat().st_mtime
+                    if file_age > cleanup_seconds:
+                        try:
+                            image_file.unlink()
+                            cleanup_count += 1
+                        except Exception as e:
+                            logger.warning(f"⚠️ 删除旧图片文件失败: {image_file} - {e}")
+            
+            if cleanup_count > 0:
+                logger.info(f"🧹 清理了 {cleanup_count} 个超过 {cleanup_hours} 小时的旧图片文件")
+                
+        except Exception as e:
+            logger.error(f"❌ 清理旧图片文件异常: {e}")
 
     @filter.command("discord_kook_config")
     async def config_command(self, event: AstrMessageEvent):
@@ -296,9 +439,11 @@ Kook平台状态: {platform_status}
 /discord_kook_config refresh_platforms - 重新检测平台适配器
 /discord_kook_config set_default_channel <kook_channel_id> - 设置默认Kook频道
 /discord_kook_config add_mapping <discord_channel_id> <kook_channel_id> - 添加频道映射
-/discord_kook_config remove_mapping <discord_channel_id> - 移除频道映射
-/discord_kook_config toggle_all_channels - 切换是否转发所有频道
-/discord_kook_config quick_test <kook_channel_id> - 快速测试（启用转发所有频道到指定Kook频道）"""
+                /discord_kook_config remove_mapping <discord_channel_id> - 移除频道映射
+                /discord_kook_config toggle_all_channels - 切换是否转发所有频道
+                /discord_kook_config quick_test <kook_channel_id> - 快速测试（启用转发所有频道到指定Kook频道）
+                /discord_kook_config cleanup_images - 立即清理旧图片文件
+                /discord_kook_config set_cleanup_hours <hours> - 设置图片清理时间（小时，0表示不自动清理）"""
             yield event.plain_result(config_text)
             return
         
@@ -358,6 +503,24 @@ Kook平台状态: {platform_status}
             self.config["include_bot_messages"] = False
             self._save_config()
             yield event.plain_result(f"🚀 快速测试配置已启用！\n- 转发功能：已启用\n- 转发所有频道：已启用\n- 默认Kook频道：{kook_channel_id}\n- 包含机器人消息：已禁用\n\n现在可以在Discord发送消息进行测试！")
+        elif command == "cleanup_images":
+            # 立即清理旧图片文件
+            await self._cleanup_old_images()
+            yield event.plain_result("🧹 图片清理完成")
+        elif command == "set_cleanup_hours" and len(args) > 1:
+            try:
+                hours = int(args[1])
+                if hours < 0:
+                    yield event.plain_result("❌ 清理时间不能为负数")
+                else:
+                    self.config["image_cleanup_hours"] = hours
+                    self._save_config()
+                    if hours == 0:
+                        yield event.plain_result("✅ 已禁用自动图片清理")
+                    else:
+                        yield event.plain_result(f"✅ 图片清理时间已设置为 {hours} 小时")
+            except ValueError:
+                yield event.plain_result("❌ 请输入有效的小时数")
         else:
             yield event.plain_result("无效的配置命令，请使用 /discord_kook_config 查看帮助")
 
