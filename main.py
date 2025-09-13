@@ -18,18 +18,36 @@ class DiscordToKookForwarder(Star):
         self.config = {}
         
         # 查找当前插件的配置
-        for plugin_md in context.get_all_stars():
-            if plugin_md.name == "discord_to_kook_forwarder":
-                if plugin_md.config and hasattr(plugin_md.config, 'keys'):
-                    try:
-                        self.plugin_config = plugin_md.config
-                        self.config = dict(plugin_md.config)  # 转换为普通字典便于操作
-                        logger.info(f"✅ 成功加载插件配置: {list(self.config.keys())}")
-                    except Exception as e:
-                        logger.warning(f"❌ 配置转换失败: {e}，使用默认配置")
-                        self.plugin_config = None
-                        self.config = {}
-                break
+        try:
+            # 尝试多种方式获取plugin_config
+            all_stars = context.get_all_stars()
+            logger.info(f"🔍 搜索插件配置，总共有 {len(all_stars)} 个插件")
+            
+            for plugin_md in all_stars:
+                logger.debug(f"检查插件: {plugin_md.name}")
+                if plugin_md.name in ["discord_to_kook_forwarder", "Discord_sync_to_kook", "astrbot_plugin_Discord_sync_to_kook"]:
+                    logger.info(f"🎯 找到匹配的插件: {plugin_md.name}")
+                    if hasattr(plugin_md, 'config') and plugin_md.config:
+                        try:
+                            self.plugin_config = plugin_md.config
+                            # 尝试转换为字典
+                            if hasattr(plugin_md.config, 'keys'):
+                                self.config = dict(plugin_md.config)
+                            logger.info(f"✅ 成功获取插件配置对象: {type(self.plugin_config)}")
+                            break
+                        except Exception as e:
+                            logger.warning(f"❌ 配置转换失败: {e}")
+            
+            # 如果没有找到配置对象，尝试从context直接获取
+            if not self.plugin_config:
+                logger.info("🔄 尝试从context直接获取配置")
+                if hasattr(context, 'config'):
+                    self.plugin_config = context.config
+                    logger.info(f"✅ 从context获取配置对象: {type(self.plugin_config)}")
+                    
+        except Exception as e:
+            logger.warning(f"❌ 获取插件配置对象失败: {e}")
+            self.plugin_config = None
         
         # 如果没有配置文件，使用默认值
         if not self.config:
@@ -38,10 +56,12 @@ class DiscordToKookForwarder(Star):
                 "discord_platform_id": "",  # Discord平台适配器ID
                 "kook_platform_id": "",     # Kook平台适配器ID
                 "forward_channels": {},      # Discord频道ID -> Kook频道ID的映射
-                "forward_all_channels": False,  # 是否转发所有频道
+                "forward_all_channels": True,  # 是否转发所有频道
                 "default_kook_channel": "",  # 默认Kook频道ID
                 "include_bot_messages": False,  # 是否包含机器人消息
                 "message_prefix": "[Discord] ",  # 消息前缀
+                "image_cleanup_hours": 24,  # 图片文件自动清理时间（小时），设置为0表示不自动清理
+                "video_cleanup_hours": 24,  # 视频文件自动清理时间（小时），设置为0表示不自动清理
             }
         
         self.discord_platform = None
@@ -64,9 +84,9 @@ class DiscordToKookForwarder(Star):
             logger.error(f"Discord到Kook转发插件初始化失败: {e}")
 
     async def _load_config(self):
-        """加载插件配置"""
+        """加载插件配置（优先使用WebUI配置）"""
         try:
-            # 尝试从config.json文件加载配置
+            # 首先从config.json文件加载基础配置
             from pathlib import Path
             
             plugin_dir = Path(__file__).parent
@@ -76,61 +96,140 @@ class DiscordToKookForwarder(Star):
                 with open(config_file, 'r', encoding='utf-8') as f:
                     file_config = json.load(f)
                 
-                # 合并配置（文件配置优先）
+                # 合并配置作为基础
                 self.config.update(file_config)
-                logger.info(f"✅ 从文件加载配置成功: {list(file_config.keys())}")
+                logger.info(f"📄 从config.json加载基础配置: {list(file_config.keys())}")
             else:
-                logger.info("📄 配置文件不存在，使用默认配置")
+                logger.info("📄 config.json不存在，创建默认配置文件")
+                # 创建默认配置文件
+                self._create_default_config_file()
                 
-            # 同步WebUI配置到内存和文件
+            # 优先使用WebUI配置并同步到文件
             await self._sync_webui_config()
                 
         except Exception as e:
             logger.warning(f"⚠️ 加载配置文件失败: {e}，使用默认配置")
+            # 即使加载失败也要尝试同步WebUI配置
+            try:
+                await self._sync_webui_config()
+            except Exception as sync_e:
+                logger.warning(f"⚠️ 同步WebUI配置也失败: {sync_e}")
+    
+    def _create_default_config_file(self):
+        """创建默认的config.json配置文件"""
+        try:
+            from pathlib import Path
+            
+            plugin_dir = Path(__file__).parent
+            config_file = plugin_dir / "config.json"
+            
+            # 使用当前内存中的默认配置
+            with open(config_file, 'w', encoding='utf-8') as f:
+                json.dump(self.config, f, ensure_ascii=False, indent=2)
+            
+            logger.info(f"✅ 已创建默认配置文件: {config_file}")
+            
+        except Exception as e:
+            logger.error(f"❌ 创建默认配置文件失败: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
     
     async def _sync_webui_config(self):
-        """同步WebUI配置到内存和config.json文件"""
+        """同步WebUI配置到内存和config.json文件（WebUI配置优先）"""
         try:
             # 如果有plugin_config对象，从中读取最新配置
             if self.plugin_config:
                 webui_config = {}
                 
-                # 尝试读取WebUI中的配置
-                config_keys = [
-                    'enabled', 'discord_platform_id', 'kook_platform_id',
-                    'forward_channels', 'forward_all_channels', 'default_kook_channel',
-                    'include_bot_messages', 'message_prefix', 'image_cleanup_hours',
-                    'video_cleanup_hours'
-                ]
+                # WebUI配置字段名映射（WebUI字段名 -> config.json字段名）
+                webui_field_mapping = {
+                    # 基础配置
+                    'enabled': 'enabled',
+                    'discord_platform_id': 'discord_platform_id', 
+                    'kook_platform_id': 'kook_platform_id',
+                    'forward_channels': 'forward_channels',
+                    'forward_all_channels': 'forward_all_channels',
+                    'default_kook_channel': 'default_kook_channel',
+                    'include_bot_messages': 'include_bot_messages',
+                    'message_prefix': 'message_prefix',
+                    'image_cleanup_hours': 'image_cleanup_hours',
+                    'video_cleanup_hours': 'video_cleanup_hours',
+                    # 可能的WebUI字段名变体
+                    'enable': 'enabled',
+                    'is_enabled': 'enabled',
+                    'forward_all': 'forward_all_channels',
+                    'all_channels': 'forward_all_channels',
+                    'default_channel': 'default_kook_channel',
+                    'kook_channel': 'default_kook_channel',
+                    'bot_messages': 'include_bot_messages',
+                    'include_bots': 'include_bot_messages',
+                    'prefix': 'message_prefix',
+                    'msg_prefix': 'message_prefix'
+                }
                 
-                for key in config_keys:
+                logger.info("🔍 开始读取WebUI配置...")
+                
+                # 尝试读取所有可能的WebUI字段
+                for webui_key, config_key in webui_field_mapping.items():
                     try:
+                        value = None
+                        
+                        # 尝试多种方式读取配置值
                         if hasattr(self.plugin_config, '__getitem__'):
-                            value = self.plugin_config.get(key)
-                        elif hasattr(self.plugin_config, key):
-                            value = getattr(self.plugin_config, key)
-                        else:
-                            continue
-                            
+                            try:
+                                value = self.plugin_config[webui_key]
+                            except (KeyError, TypeError):
+                                pass
+                        
+                        if value is None and hasattr(self.plugin_config, 'get'):
+                            try:
+                                value = self.plugin_config.get(webui_key)
+                            except Exception:
+                                pass
+                        
+                        if value is None and hasattr(self.plugin_config, webui_key):
+                            try:
+                                value = getattr(self.plugin_config, webui_key)
+                            except Exception:
+                                pass
+                        
+                        # 如果读取到有效值，添加到webui_config
                         if value is not None:
-                            webui_config[key] = value
-                    except Exception:
+                            webui_config[config_key] = value
+                            logger.info(f"📋 WebUI配置 {webui_key} -> {config_key}: {value}")
+                            
+                    except Exception as e:
+                        logger.debug(f"⚠️ 读取WebUI配置项 {webui_key} 失败: {e}")
                         continue
                 
-                # 如果从WebUI读取到配置，更新内存配置
+                # 强制使用WebUI配置更新内存配置
                 if webui_config:
-                    old_config = self.config.copy()
+                    logger.info(f"🔄 使用WebUI配置更新内存配置: {list(webui_config.keys())}")
                     self.config.update(webui_config)
                     
-                    # 检查配置是否有变化
-                    if old_config != self.config:
-                        logger.info(f"🔄 检测到WebUI配置变更，同步到config.json")
-                        self._save_config()
-                    else:
-                        logger.debug("📋 WebUI配置无变化")
+                    # 强制同步到config.json（确保WebUI配置持久化）
+                    logger.info("💾 强制同步WebUI配置到config.json")
+                    self._save_config()
+                else:
+                    logger.warning("⚠️ 未能从WebUI读取到任何配置，使用现有配置")
+                    # 即使没有读取到WebUI配置，也创建config.json文件
+                    logger.info("📝 创建基础config.json文件")
+                    self._save_config()
+            else:
+                logger.warning("⚠️ plugin_config对象不存在，无法读取WebUI配置")
+                # 没有plugin_config时也要确保config.json存在
+                logger.info("📝 确保config.json文件存在")
+                self._save_config()
                         
         except Exception as e:
-            logger.warning(f"⚠️ 同步WebUI配置失败: {e}")
+            logger.error(f"❌ 同步WebUI配置失败: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            # 即使同步失败，也要确保config.json存在
+            try:
+                self._save_config()
+            except Exception as save_e:
+                logger.error(f"❌ 保存配置文件也失败: {save_e}")
     
     def _save_config(self):
         """保存插件配置到文件"""
@@ -148,11 +247,13 @@ class DiscordToKookForwarder(Star):
                         elif hasattr(self.plugin_config, key):
                             setattr(self.plugin_config, key, value)
                     
-                    # 尝试保存
-                    if hasattr(self.plugin_config, 'save'):
+                    # 检查save方法是否存在且可调用
+                    if hasattr(self.plugin_config, 'save') and callable(getattr(self.plugin_config, 'save', None)):
                         self.plugin_config.save()
                         saved = True
                         logger.info("✅ 插件配置已保存（方式1）")
+                    else:
+                        logger.debug("📋 plugin_config对象没有可调用的save方法，跳过方式1")
                 except Exception as e:
                     logger.warning(f"⚠️ 方式1保存失败: {e}")
             

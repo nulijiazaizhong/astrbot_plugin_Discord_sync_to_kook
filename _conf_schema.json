@@ -7,12 +7,12 @@
   "discord_platform_id": {
     "type": "string",
     "default": "",
-    "description": "Discord平台适配器ID（自动检测）"
+    "description": "Discord平台适配器ID"
   },
   "kook_platform_id": {
     "type": "string",
     "default": "",
-    "description": "Kook平台适配器ID（自动检测）"
+    "description": "Kook平台适配器ID"
   },
   "forward_all_channels": {
     "type": "bool",
