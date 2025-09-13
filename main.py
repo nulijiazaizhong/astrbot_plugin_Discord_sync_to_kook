@@ -1,13 +1,16 @@
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
-from astrbot.api.message_components import Plain, Image, Video, At, AtAll
+from astrbot.api.message_components import Plain, Image, Video, At, AtAll, File
 from astrbot.core.message.message_event_result import MessageChain
 from astrbot.core.platform.message_session import MessageSesion
 from astrbot.core.platform.message_type import MessageType
 from astrbot.core.star.filter.platform_adapter_type import PlatformAdapterType
+from pathlib import Path
 import asyncio
 import json
+import aiohttp
+import os
 
 @register("discord_to_kook_forwarder", "AstrBot Community", "Discord消息转发到Kook插件", "1.0.0", "https://github.com/AstrBotDevs/AstrBot")
 class DiscordToKookForwarder(Star):
@@ -73,15 +76,22 @@ class DiscordToKookForwarder(Star):
             # 加载配置
             await self._load_config()
             
-            # 获取平台实例
-            await self._get_platform_instances()
+            # 尝试获取平台实例（如果失败不影响插件加载）
+            try:
+                await self._get_platform_instances()
+                
+                if self.discord_platform and self.kook_platform:
+                    logger.info("✅ Discord到Kook转发插件初始化成功")
+                else:
+                    logger.warning("⚠️ 部分平台适配器未找到，插件将在运行时动态获取")
+            except Exception as platform_error:
+                logger.warning(f"⚠️ 初始化时获取平台实例失败: {platform_error}，插件将在运行时动态获取")
             
-            if self.discord_platform and self.kook_platform:
-                logger.info("Discord到Kook转发插件初始化成功")
-            else:
-                logger.warning("Discord到Kook转发插件初始化失败：未找到对应的平台适配器")
+            logger.info("✅ Discord到Kook转发插件加载完成")
         except Exception as e:
-            logger.error(f"Discord到Kook转发插件初始化失败: {e}")
+            logger.error(f"❌ Discord到Kook转发插件初始化失败: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
 
     async def _load_config(self):
         """加载插件配置（优先使用WebUI配置）"""
@@ -332,6 +342,11 @@ class DiscordToKookForwarder(Star):
                 logger.info("❌ 转发功能已禁用，跳过消息")
                 return
             
+            # 动态检查和获取平台实例（解决重启后需要重载的问题）
+            if not self.kook_platform:
+                logger.info("🔄 Kook平台实例未找到，尝试重新获取...")
+                await self._get_platform_instances()
+                
             if not self.kook_platform:
                 logger.warning("❌ Kook平台未找到，无法转发消息")
                 return
@@ -402,6 +417,12 @@ class DiscordToKookForwarder(Star):
                 message_chain.chain.append(Plain(component.text))
             elif isinstance(component, Image):
                 # 保留图片
+                message_chain.chain.append(component)
+            elif isinstance(component, Video):
+                # 保留视频
+                message_chain.chain.append(component)
+            elif isinstance(component, File):
+                # 保留文件
                 message_chain.chain.append(component)
             elif isinstance(component, At):
                 # 转换@提及为文本
@@ -525,7 +546,7 @@ class DiscordToKookForwarder(Star):
                             if local_video_path:
                                 # 使用本地视频路径发送到Kook
                                 logger.info(f"📤 准备发送本地视频到Kook: {local_video_path}")
-                                success = await kook_client.send_video(channel_id, local_video_path)
+                                success = await kook_client.send_image(channel_id, local_video_path)
                                 if success:
                                     logger.info(f"✅ 发送视频消息成功: {display_filename}")
                                 else:
@@ -543,6 +564,79 @@ class DiscordToKookForwarder(Star):
                     else:
                         logger.warning("⚠️ 视频组件没有有效的文件URL")
                         await kook_client.send_text(channel_id, "[视频信息缺失]")
+                elif isinstance(component, File):
+                    # 处理文件消息（可能是图片或视频）
+                    file_url = component.url if component.url else component.file
+                    filename = getattr(component, 'name', '未知文件名')
+                    
+                    logger.info(f"📁 检测到文件组件: URL={file_url}, 文件名={filename}")
+                    
+                    if file_url:
+                        # 根据文件扩展名判断文件类型
+                        from pathlib import Path
+                        file_ext = Path(filename).suffix.lower() if filename else ''
+                        
+                        # 图片文件扩展名
+                        image_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.svg'}
+                        # 视频文件扩展名
+                        video_extensions = {'.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm', '.mkv', '.m4v'}
+                        
+                        if file_ext in image_extensions:
+                            # 作为图片处理
+                            logger.info(f"🖼️ 文件识别为图片: {filename}")
+                            try:
+                                # 下载Discord图片到本地
+                                local_image_path = await self._download_image(file_url, filename)
+                                if local_image_path:
+                                    # 使用本地图片路径发送到Kook
+                                    logger.info(f"📤 准备发送本地图片到Kook: {local_image_path}")
+                                    success = await kook_client.send_image(channel_id, local_image_path)
+                                    if success:
+                                        logger.info(f"✅ 发送图片文件成功: {filename}")
+                                    else:
+                                        logger.error(f"❌ 发送图片文件到Kook失败: {filename}")
+                                        await kook_client.send_text(channel_id, f"[图片文件发送失败: {filename}]")
+                                else:
+                                    logger.error("❌ 图片文件下载失败")
+                                    await kook_client.send_text(channel_id, f"[图片文件下载失败: {filename}]")
+                            except Exception as file_error:
+                                logger.error(f"❌ 发送图片文件失败: {file_error}")
+                                import traceback
+                                logger.error(traceback.format_exc())
+                                await kook_client.send_text(channel_id, f"[图片文件转发失败: {filename}]")
+                        
+                        elif file_ext in video_extensions:
+                            # 作为视频处理
+                            logger.info(f"🎬 文件识别为视频: {filename}")
+                            try:
+                                # 下载Discord视频到本地
+                                local_video_path = await self._download_video(file_url, filename)
+                                if local_video_path:
+                                    # 使用直接的HTTP API调用发送视频到Kook
+                                    logger.info(f"📤 准备发送本地视频到Kook: {local_video_path}")
+                                    success = await self._send_video_to_kook_direct(channel_id, local_video_path, filename)
+                                    
+                                    if success:
+                                        logger.info(f"✅ 发送视频文件成功: {filename}")
+                                    else:
+                                        logger.error(f"❌ 发送视频文件到Kook失败: {filename}")
+                                        await kook_client.send_text(channel_id, f"[视频文件发送失败: {filename}]")
+                                else:
+                                    logger.error("❌ 视频文件下载失败")
+                                    await kook_client.send_text(channel_id, f"[视频文件下载失败: {filename}]")
+                            except Exception as file_error:
+                                logger.error(f"❌ 发送视频文件失败: {file_error}")
+                                import traceback
+                                logger.error(traceback.format_exc())
+                                await kook_client.send_text(channel_id, f"[视频文件转发失败: {filename}]")
+                        
+                        else:
+                            # 不支持的文件类型
+                            logger.warning(f"⚠️ 不支持的文件类型: {filename} (扩展名: {file_ext})")
+                            await kook_client.send_text(channel_id, f"[不支持的文件类型: {filename}]")
+                    else:
+                        logger.warning("⚠️ 文件组件没有有效的文件URL")
+                        await kook_client.send_text(channel_id, "[文件信息缺失]")
                 else:
                     logger.warning(f"⚠️ 不支持的消息组件类型: {type(component)}")
                     
@@ -650,6 +744,146 @@ class DiscordToKookForwarder(Star):
                 
         except Exception as e:
             logger.error(f"❌ 清理旧视频文件异常: {e}")
+    
+    async def _send_video_to_kook_direct(self, channel_id: str, video_path: str, filename: str) -> bool:
+        """直接使用HTTP API发送视频到Kook"""
+        try:
+            # 获取Kook客户端和token
+            if not self.kook_platform:
+                logger.error("❌ Kook平台实例未找到，无法发送视频")
+                return False
+            
+            kook_client = getattr(self.kook_platform, 'client', None)
+            if not kook_client:
+                logger.error("❌ 无法获取Kook客户端")
+                return False
+            
+            token = getattr(kook_client, 'token', None)
+            if not token:
+                logger.error("❌ 无法获取Kook认证token")
+                return False
+            
+            # 第一步：上传视频文件到Kook
+            logger.info(f"📤 开始上传视频文件: {video_path}")
+            video_url = await self._upload_video_to_kook(video_path, token)
+            if not video_url:
+                logger.error(f"❌ 视频上传失败: {filename}")
+                return False
+            
+            # 第二步：发送视频消息到频道
+            logger.info(f"📡 开始发送视频消息到频道: {channel_id}")
+            success = await self._send_video_message_to_kook(channel_id, video_url, filename, token)
+            
+            return success
+            
+        except Exception as e:
+            logger.error(f"❌ 发送视频到Kook异常: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return False
+    
+    async def _upload_video_to_kook(self, video_path: str, token: str) -> str:
+        """上传视频到Kook并返回URL"""
+        try:
+            # 检查文件是否存在
+            if not os.path.exists(video_path):
+                logger.error(f"❌ 视频文件不存在: {video_path}")
+                return None
+            
+            # 获取文件大小
+            file_size = os.path.getsize(video_path)
+            logger.info(f"📁 视频文件大小: {file_size} 字节 ({file_size / (1024 * 1024):.2f} MB)")
+            
+            # 构建上传URL和请求头
+            upload_url = "https://www.kookapp.cn/api/v3/asset/create"
+            headers = {'Authorization': f'Bot {token}'}
+            
+            logger.info(f"📡 发送上传请求到: {upload_url}")
+            
+            # 使用aiohttp上传文件
+            async with aiohttp.ClientSession() as session:
+                with open(video_path, 'rb') as f:
+                    data = aiohttp.FormData()
+                    data.add_field('file', f, filename=Path(video_path).name)
+                    
+                    async with session.post(upload_url, data=data, headers=headers) as response:
+                        logger.info(f"📥 收到上传响应，状态码: {response.status}")
+                        
+                        if response.status == 200:
+                            result = await response.json()
+                            logger.info(f"📄 上传响应内容: {result}")
+                            
+                            if result.get('code') == 0:
+                                asset_url = result['data']['url']
+                                logger.info(f"✅ 视频上传成功: {asset_url}")
+                                
+                                # 等待服务器处理视频文件
+                                logger.info(f"⏳ 等待服务器处理视频文件...")
+                                import asyncio
+                                await asyncio.sleep(15.0)  # 等待15秒让服务器处理视频
+                                logger.info(f"✅ 服务器处理完成，准备发送消息")
+                                
+                                return asset_url
+                            else:
+                                error_msg = result.get('message', '未知错误')
+                                logger.error(f"❌ 视频上传失败: {error_msg}")
+                                return None
+                        else:
+                            response_text = await response.text()
+                            logger.error(f"❌ 视频上传HTTP错误: {response.status}")
+                            logger.error(f"📄 错误详情: {response_text}")
+                            return None
+                            
+        except Exception as e:
+            logger.error(f"❌ 上传视频异常: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return None
+    
+    async def _send_video_message_to_kook(self, channel_id: str, video_url: str, filename: str, token: str) -> bool:
+        """发送视频消息到Kook频道"""
+        try:
+            # 构建消息发送URL和请求头
+            url = "https://www.kookapp.cn/api/v3/message/create"
+            headers = {
+                "Authorization": f"Bot {token}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "target_id": channel_id,
+                "content": video_url,
+                "type": 3  # 使用type=3发送视频消息
+            }
+            
+            logger.info(f"📡 发送视频消息到频道 {channel_id}")
+            logger.info(f"📄 消息内容: {payload}")
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, headers=headers, json=payload) as resp:
+                    logger.info(f"📥 收到发送响应，状态码: {resp.status}")
+                    
+                    if resp.status == 200:
+                        result = await resp.json()
+                        logger.info(f"📄 发送响应内容: {result}")
+                        
+                        if result.get('code') == 0:
+                            logger.info(f"✅ 发送视频消息成功: {filename}")
+                            return True
+                        else:
+                            error_msg = result.get('message', '未知错误')
+                            logger.error(f"❌ 发送视频消息失败: {error_msg}")
+                            return False
+                    else:
+                        response_text = await resp.text()
+                        logger.error(f"❌ 发送视频消息HTTP错误: {resp.status}")
+                        logger.error(f"📄 错误详情: {response_text}")
+                        return False
+                        
+        except Exception as e:
+            logger.error(f"❌ 发送视频消息异常: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return False
 
     async def _download_image(self, image_url: str, filename: str) -> str:
         """下载Discord图片到本地public/image文件夹"""
