@@ -19,6 +19,11 @@
     "default": false,
     "description": "是否转发所有Discord频道的消息"
   },
+  "default_discord_channel": {
+    "type": "string",
+    "default": "",
+    "description": "默认Discord频道ID（当关闭转发所有频道时，只转发此频道的消息）"
+  },
   "default_kook_channel": {
     "type": "string",
     "default": "",
@@ -34,12 +39,6 @@
     "default": "[Discord] ",
     "description": "转发消息的前缀标识"
   },
-  "forward_channels": {
-    "type": "object",
-    "default": {},
-    "description": "Discord频道ID到Kook频道ID的映射关系（键为Discord频道ID，值为Kook频道ID）",
-    "items": {}
-  },
   "image_cleanup_hours": {
     "type": "int",
     "default": 24,
@@ -49,5 +48,12 @@
     "type": "int",
     "default": 24,
     "description": "视频文件自动清理时间（小时），设置为0表示不自动清理"
+  },
+  "channel_mappings": {
+    "type": "text",
+    "default": "",
+    "description": "多频道映射配置 - 每行一个映射，格式：Discord频道ID 空格 Kook频道ID\n例如：\n1416029491796381806 3467992097213849\n1234567890123456 9876543210987654",
+    "title": "多频道映射配置",
+    "placeholder": "请输入频道映射，每行一个，格式：Discord频道ID 空格 Kook频道ID\n例如：\n1416029491796381806 3467992097213849\n1234567890123456 9876543210987654"
   }
 }

@@ -60,11 +60,13 @@ class DiscordToKookForwarder(Star):
                 "kook_platform_id": "",     # Kook平台适配器ID
                 "forward_channels": {},      # Discord频道ID -> Kook频道ID的映射
                 "forward_all_channels": True,  # 是否转发所有频道
+                "default_discord_channel": "",  # 默认Discord频道ID
                 "default_kook_channel": "",  # 默认Kook频道ID
                 "include_bot_messages": False,  # 是否包含机器人消息
                 "message_prefix": "[Discord] ",  # 消息前缀
                 "image_cleanup_hours": 24,  # 图片文件自动清理时间（小时），设置为0表示不自动清理
                 "video_cleanup_hours": 24,  # 视频文件自动清理时间（小时），设置为0表示不自动清理
+                "channel_mappings": [],  # 多频道映射配置（数组格式）
             }
         
         self.discord_platform = None
@@ -159,16 +161,20 @@ class DiscordToKookForwarder(Star):
                     'kook_platform_id': 'kook_platform_id',
                     'forward_channels': 'forward_channels',
                     'forward_all_channels': 'forward_all_channels',
+                    'default_discord_channel': 'default_discord_channel',
                     'default_kook_channel': 'default_kook_channel',
                     'include_bot_messages': 'include_bot_messages',
                     'message_prefix': 'message_prefix',
                     'image_cleanup_hours': 'image_cleanup_hours',
                     'video_cleanup_hours': 'video_cleanup_hours',
+                    'channel_mappings': 'channel_mappings',
                     # 可能的WebUI字段名变体
                     'enable': 'enabled',
                     'is_enabled': 'enabled',
                     'forward_all': 'forward_all_channels',
                     'all_channels': 'forward_all_channels',
+                    'default_discord': 'default_discord_channel',
+                    'discord_channel': 'default_discord_channel',
                     'default_channel': 'default_kook_channel',
                     'kook_channel': 'default_kook_channel',
                     'bot_messages': 'include_bot_messages',
@@ -215,6 +221,39 @@ class DiscordToKookForwarder(Star):
                 # 强制使用WebUI配置更新内存配置
                 if webui_config:
                     logger.info(f"🔄 使用WebUI配置更新内存配置: {list(webui_config.keys())}")
+                    
+                    # 特殊处理channel_mappings字段 - 转换为forward_channels
+                    if 'channel_mappings' in webui_config:
+                        channel_mappings_text = webui_config['channel_mappings']
+                        logger.info(f"📋 解析频道映射配置: {channel_mappings_text}")
+                        
+                        # 根据配置类型选择解析方法
+                        if isinstance(channel_mappings_text, str):
+                            # 新的文本格式："Discord频道ID 空格 Kook频道ID"
+                            parsed_mappings = self._parse_channel_mappings_text(channel_mappings_text)
+                        elif isinstance(channel_mappings_text, list):
+                            # 旧的数组格式（向下兼容）
+                            parsed_mappings = self._parse_channel_mappings_array(channel_mappings_text)
+                        else:
+                            logger.warning(f"⚠️ 不支持的channel_mappings格式: {type(channel_mappings_text)}")
+                            parsed_mappings = {}
+                        
+                        # 更新forward_channels配置
+                        webui_config['forward_channels'] = parsed_mappings
+                        logger.info(f"✅ 解析后的频道映射: {parsed_mappings}")
+                        
+                        # 移除channel_mappings，避免重复存储
+                        del webui_config['channel_mappings']
+                    
+                    # 如果WebUI直接提供了forward_channels，也要处理
+                    elif 'forward_channels' in webui_config:
+                        forward_channels = webui_config['forward_channels']
+                        if isinstance(forward_channels, dict):
+                            logger.info(f"📋 直接使用WebUI的forward_channels配置: {forward_channels}")
+                        else:
+                            logger.warning(f"⚠️ WebUI的forward_channels格式不正确: {type(forward_channels)}")
+                            webui_config['forward_channels'] = {}
+                    
                     self.config.update(webui_config)
                     
                     # 强制同步到config.json（确保WebUI配置持久化）
@@ -241,31 +280,209 @@ class DiscordToKookForwarder(Star):
             except Exception as save_e:
                 logger.error(f"❌ 保存配置文件也失败: {save_e}")
     
+    def _parse_channel_mappings_array(self, mappings_array: list) -> dict:
+        """解析数组格式的频道映射配置
+        
+        Args:
+            mappings_array: 数组格式的映射配置，如：
+                [{"discord_channel": "123456789", "kook_channel": "987654321"}]
+        
+        Returns:
+            dict: 解析后的频道映射字典
+        """
+        mappings = {}
+        
+        if not mappings_array:
+            logger.info("📋 频道映射配置为空")
+            return mappings
+        
+        try:
+            for index, mapping in enumerate(mappings_array):
+                if not isinstance(mapping, dict):
+                    logger.warning(f"⚠️ 第{index+1}个映射不是字典格式: {mapping}")
+                    continue
+                
+                discord_id = mapping.get('discord_channel', '').strip()
+                kook_id = mapping.get('kook_channel', '').strip()
+                
+                if discord_id and kook_id:
+                    mappings[discord_id] = kook_id
+                    logger.info(f"📝 解析映射 {index+1}: {discord_id} -> {kook_id}")
+                else:
+                    logger.warning(f"⚠️ 第{index+1}个映射ID为空: discord='{discord_id}', kook='{kook_id}'")
+            
+            logger.info(f"✅ 成功解析 {len(mappings)} 个频道映射")
+            
+        except Exception as e:
+            logger.error(f"❌ 解析频道映射配置失败: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+        
+        return mappings
+    
+    def _parse_channel_mappings_text(self, mappings_text: str) -> dict:
+        """解析新的文本格式的频道映射配置
+        
+        Args:
+            mappings_text: 文本格式的映射配置，如：
+                "1416029491796381806 3467992097213849\n1234567890123456 9876543210987654"
+        
+        Returns:
+            dict: 解析后的频道映射字典
+        """
+        mappings = {}
+        
+        if not mappings_text or not mappings_text.strip():
+            logger.info("📋 频道映射配置为空")
+            return mappings
+        
+        try:
+            # 按行分割
+            lines = mappings_text.strip().split('\n')
+            
+            for line_num, line in enumerate(lines, 1):
+                line = line.strip()
+                if not line:
+                    continue  # 跳过空行
+                
+                # 按空格分割
+                parts = line.split()
+                if len(parts) == 2:
+                    discord_id = parts[0].strip()
+                    kook_id = parts[1].strip()
+                    
+                    if discord_id and kook_id:
+                        mappings[discord_id] = kook_id
+                        logger.info(f"📝 解析映射 {line_num}: {discord_id} -> {kook_id}")
+                    else:
+                        logger.warning(f"⚠️ 第{line_num}行映射格式错误（ID为空）: {line}")
+                elif len(parts) > 2:
+                    # 如果有多个空格，取第一个和最后一个作为频道ID
+                    discord_id = parts[0].strip()
+                    kook_id = parts[-1].strip()
+                    
+                    if discord_id and kook_id:
+                        mappings[discord_id] = kook_id
+                        logger.info(f"📝 解析映射 {line_num}: {discord_id} -> {kook_id}")
+                        logger.warning(f"⚠️ 第{line_num}行包含多个空格，已取首尾作为频道ID: {line}")
+                    else:
+                        logger.warning(f"⚠️ 第{line_num}行映射格式错误（ID为空）: {line}")
+                else:
+                    logger.warning(f"⚠️ 第{line_num}行缺少空格分隔符: {line}")
+            
+            logger.info(f"✅ 成功解析 {len(mappings)} 个频道映射")
+            
+        except Exception as e:
+            logger.error(f"❌ 解析频道映射配置失败: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+        
+        return mappings
+    
+    def _parse_channel_mappings(self, mappings_text: str) -> dict:
+        """解析文本格式的频道映射配置（向下兼容旧格式）
+        
+        Args:
+            mappings_text: 文本格式的映射配置，如：
+                "1234567891112 -> 123456789\n9876543210000 -> 987654321"
+        
+        Returns:
+            dict: 解析后的频道映射字典
+        """
+        mappings = {}
+        
+        if not mappings_text or not mappings_text.strip():
+            logger.info("📋 频道映射配置为空")
+            return mappings
+        
+        try:
+            # 按行分割
+            lines = mappings_text.strip().split('\n')
+            
+            for line_num, line in enumerate(lines, 1):
+                line = line.strip()
+                if not line:
+                    continue  # 跳过空行
+                
+                # 查找箭头分隔符
+                if '->' in line:
+                    parts = line.split('->', 1)
+                    if len(parts) == 2:
+                        discord_id = parts[0].strip()
+                        kook_id = parts[1].strip()
+                        
+                        if discord_id and kook_id:
+                            mappings[discord_id] = kook_id
+                            logger.info(f"📝 解析映射 {line_num}: {discord_id} -> {kook_id}")
+                        else:
+                            logger.warning(f"⚠️ 第{line_num}行映射格式错误（ID为空）: {line}")
+                    else:
+                        logger.warning(f"⚠️ 第{line_num}行映射格式错误（分割失败）: {line}")
+                else:
+                    logger.warning(f"⚠️ 第{line_num}行缺少箭头分隔符: {line}")
+            
+            logger.info(f"✅ 成功解析 {len(mappings)} 个频道映射")
+            
+        except Exception as e:
+            logger.error(f"❌ 解析频道映射配置失败: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+        
+        return mappings
+    
     def _save_config(self):
         """保存插件配置到文件"""
         try:
             # 尝试多种方式保存配置
             saved = False
             
-            # 方式1：使用plugin_config对象
+            # 方式1：使用plugin_config对象（确保WebUI配置能够正确保存）
             if self.plugin_config:
                 try:
-                    # 更新配置对象
+                    # 更新配置对象，特别处理channel_mappings
                     for key, value in self.config.items():
+                        # 跳过forward_channels，因为它是内部使用的
+                        if key == 'forward_channels':
+                            continue
+                            
                         if hasattr(self.plugin_config, '__setitem__'):
                             self.plugin_config[key] = value
                         elif hasattr(self.plugin_config, key):
                             setattr(self.plugin_config, key, value)
                     
+                    # 特别处理channel_mappings - 确保WebUI能够编辑（文本格式）
+                    if 'forward_channels' in self.config and self.config['forward_channels']:
+                        mappings_lines = []
+                        for discord_id, kook_id in self.config['forward_channels'].items():
+                            mappings_lines.append(f"{discord_id} {kook_id}")
+                        
+                        mappings_text = '\n'.join(mappings_lines)
+                        
+                        # 保存到plugin_config的channel_mappings字段
+                        if hasattr(self.plugin_config, '__setitem__'):
+                            self.plugin_config['channel_mappings'] = mappings_text
+                        elif hasattr(self.plugin_config, 'channel_mappings'):
+                            setattr(self.plugin_config, 'channel_mappings', mappings_text)
+                        
+                        logger.info(f"📝 更新WebUI的channel_mappings配置: {len(mappings_lines)} 个映射")
+                    else:
+                        # 如果没有映射，设置为空字符串
+                        if hasattr(self.plugin_config, '__setitem__'):
+                            self.plugin_config['channel_mappings'] = ""
+                        elif hasattr(self.plugin_config, 'channel_mappings'):
+                            setattr(self.plugin_config, 'channel_mappings', "")
+                    
                     # 检查save方法是否存在且可调用
                     if hasattr(self.plugin_config, 'save') and callable(getattr(self.plugin_config, 'save', None)):
                         self.plugin_config.save()
                         saved = True
-                        logger.info("✅ 插件配置已保存（方式1）")
+                        logger.info("✅ 插件配置已保存到WebUI（方式1）")
                     else:
                         logger.debug("📋 plugin_config对象没有可调用的save方法，跳过方式1")
                 except Exception as e:
                     logger.warning(f"⚠️ 方式1保存失败: {e}")
+                    import traceback
+                    logger.debug(traceback.format_exc())
             
             # 方式2：直接写入配置文件（始终执行，确保WebUI配置同步）
             try:
@@ -275,8 +492,21 @@ class DiscordToKookForwarder(Star):
                 plugin_dir = Path(__file__).parent
                 config_file = plugin_dir / "config.json"
                 
+                # 准备保存的配置，包含转换后的channel_mappings
+                save_config = self.config.copy()
+                
+                # 将forward_channels字典转换为channel_mappings文本格式
+                if 'forward_channels' in save_config and save_config['forward_channels']:
+                    mappings_lines = []
+                    for discord_id, kook_id in save_config['forward_channels'].items():
+                        mappings_lines.append(f"{discord_id} {kook_id}")
+                    save_config['channel_mappings'] = '\n'.join(mappings_lines)
+                    logger.info(f"📝 转换频道映射为文本格式: {len(mappings_lines)} 个映射")
+                else:
+                    save_config['channel_mappings'] = ""
+                
                 with open(config_file, 'w', encoding='utf-8') as f:
-                    json.dump(self.config, f, ensure_ascii=False, indent=2)
+                    json.dump(save_config, f, ensure_ascii=False, indent=2)
                 
                 saved = True
                 logger.info("✅ 插件配置已同步到config.json")
@@ -335,7 +565,7 @@ class DiscordToKookForwarder(Star):
         try:
             logger.info(f"🔔 接收到Discord消息: 发送者={event.get_sender_name()}, 内容='{event.message_str}', 平台={event.get_platform_name()}")
             
-            # 每次处理消息前同步WebUI配置
+            # 每次处理消息前同步WebUI配置（确保实时响应WebUI配置变更）
             await self._sync_webui_config()
             
             if not self.config["enabled"]:
@@ -376,6 +606,17 @@ class DiscordToKookForwarder(Star):
             logger.error(f"❌ 转发Discord消息到Kook时发生错误: {e}")
             import traceback
             logger.error(traceback.format_exc())
+    
+    async def on_config_changed(self):
+        """配置变更回调 - 当WebUI配置发生变化时触发"""
+        try:
+            logger.info("🔄 检测到配置变更，重新加载配置...")
+            await self._sync_webui_config()
+            logger.info("✅ 配置重新加载完成")
+        except Exception as e:
+            logger.error(f"❌ 配置重新加载失败: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
 
     async def _should_forward_message(self, event: AstrMessageEvent) -> bool:
         """判断是否应该转发此消息"""
@@ -387,20 +628,40 @@ class DiscordToKookForwarder(Star):
             logger.info("❌ 跳过机器人消息（配置不包含机器人消息）")
             return False
         
+        # 获取Discord频道ID
+        discord_channel_id = event.message_obj.group_id or event.session_id
+        logger.info(f"📍 Discord频道ID: {discord_channel_id}")
+        
         # 检查频道配置
         if self.config["forward_all_channels"]:
             logger.info("✅ 转发所有频道已启用，允许转发")
             return True
         
-        # 检查是否在转发频道列表中
-        discord_channel_id = event.message_obj.group_id or event.session_id
-        logger.info(f"📍 Discord频道ID: {discord_channel_id}")
-        logger.info(f"📋 配置的转发频道列表: {list(self.config['forward_channels'].keys())}")
+        # 多频道映射检查 - 优先级最高
+        if discord_channel_id in self.config["forward_channels"]:
+            logger.info(f"✅ 频道在多频道映射列表中: {discord_channel_id} -> {self.config['forward_channels'][discord_channel_id]}")
+            return True
         
-        is_in_forward_list = discord_channel_id in self.config["forward_channels"]
-        logger.info(f"📝 频道是否在转发列表中: {is_in_forward_list}")
+        # 默认频道检查 - 向下兼容
+        default_discord_channel = self.config.get("default_discord_channel")
+        default_kook_channel = self.config.get("default_kook_channel")
         
-        return is_in_forward_list
+        # 如果是默认Discord频道且有默认Kook频道
+        if default_discord_channel and discord_channel_id == default_discord_channel and default_kook_channel:
+            logger.info(f"✅ 匹配默认Discord频道: {discord_channel_id} -> {default_kook_channel}")
+            return True
+        
+        # 如果没有配置默认Discord频道，但有默认Kook频道（向下兼容旧配置）
+        if not default_discord_channel and default_kook_channel:
+            logger.info(f"✅ 使用默认Kook频道（向下兼容）: {discord_channel_id} -> {default_kook_channel}")
+            return True
+        
+        logger.info(f"❌ 频道不在转发范围内: {discord_channel_id}")
+        logger.info(f"   - 多频道映射: {list(self.config['forward_channels'].keys())}")
+        logger.info(f"   - 默认Discord频道: {default_discord_channel}")
+        logger.info(f"   - 默认Kook频道: {default_kook_channel}")
+        
+        return False
 
     async def _convert_message_for_kook(self, event: AstrMessageEvent) -> MessageChain:
         """将Discord消息转换为Kook格式"""
@@ -434,22 +695,37 @@ class DiscordToKookForwarder(Star):
         return message_chain
 
     async def _get_target_kook_channel(self, event: AstrMessageEvent) -> str:
-        """获取目标Kook频道ID"""
+        """获取目标Kook频道ID - 支持多频道映射"""
         discord_channel_id = event.message_obj.group_id or event.session_id
         logger.info(f"🔍 查找目标Kook频道，Discord频道ID: {discord_channel_id}")
         
-        # 检查频道映射
-        if discord_channel_id in self.config["forward_channels"]:
-            target = self.config["forward_channels"][discord_channel_id]
-            logger.info(f"✅ 找到频道映射: {discord_channel_id} -> {target}")
+        # 优先级1: 检查多频道映射配置
+        forward_channels = self.config.get("forward_channels", {})
+        if discord_channel_id in forward_channels:
+            target = forward_channels[discord_channel_id]
+            logger.info(f"✅ 找到多频道映射: {discord_channel_id} -> {target}")
             return target
         
-        # 使用默认频道
-        if self.config["default_kook_channel"]:
-            logger.info(f"📌 使用默认Kook频道: {self.config['default_kook_channel']}")
-            return self.config["default_kook_channel"]
+        # 优先级2: 检查是否是默认Discord频道
+        default_discord_channel = self.config.get("default_discord_channel")
+        default_kook_channel = self.config.get("default_kook_channel")
         
-        logger.warning("❌ 未找到目标Kook频道（无映射且无默认频道）")
+        if default_discord_channel and discord_channel_id == default_discord_channel and default_kook_channel:
+            logger.info(f"✅ 匹配默认Discord频道映射: {discord_channel_id} -> {default_kook_channel}")
+            return default_kook_channel
+        
+        # 优先级3: 向下兼容 - 如果没有配置默认Discord频道，使用默认Kook频道
+        if not default_discord_channel and default_kook_channel:
+            logger.info(f"📌 使用默认Kook频道（向下兼容）: {default_kook_channel}")
+            return default_kook_channel
+        
+        # 调试信息
+        logger.warning(f"❌ 未找到目标Kook频道: {discord_channel_id}")
+        logger.info(f"   - 多频道映射数量: {len(forward_channels)}")
+        logger.info(f"   - 映射列表: {list(forward_channels.keys())}")
+        logger.info(f"   - 默认Discord频道: {default_discord_channel}")
+        logger.info(f"   - 默认Kook频道: {default_kook_channel}")
+        
         return None
 
     async def _send_to_kook(self, channel_id: str, message_chain: MessageChain):
