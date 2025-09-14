@@ -774,9 +774,9 @@ class DiscordToKookForwarder(Star):
                             # 下载Discord图片到本地
                             local_image_path = await self._download_image(image_url, filename)
                             if local_image_path:
-                                # 使用本地图片路径发送到Kook
-                                logger.info(f"📤 准备发送本地图片到Kook: {local_image_path}")
-                                success = await kook_client.send_image(channel_id, local_image_path)
+                                # 上传图片到Kook并发送
+                                logger.info(f"📤 准备上传并发送图片到Kook: {local_image_path}")
+                                success = await self._upload_and_send_image_to_kook(channel_id, local_image_path, display_filename)
                                 if success:
                                     logger.info(f"✅ 发送图片消息成功: {display_filename}")
                                 else:
@@ -864,9 +864,9 @@ class DiscordToKookForwarder(Star):
                                 # 下载Discord图片到本地
                                 local_image_path = await self._download_image(file_url, filename)
                                 if local_image_path:
-                                    # 使用本地图片路径发送到Kook
-                                    logger.info(f"📤 准备发送本地图片到Kook: {local_image_path}")
-                                    success = await kook_client.send_image(channel_id, local_image_path)
+                                    # 上传图片到Kook并发送
+                                    logger.info(f"📤 准备上传并发送图片到Kook: {local_image_path}")
+                                    success = await self._upload_and_send_image_to_kook(channel_id, local_image_path, filename)
                                     if success:
                                         logger.info(f"✅ 发送图片文件成功: {filename}")
                                     else:
@@ -1087,22 +1087,43 @@ class DiscordToKookForwarder(Star):
                         
                         if response.status == 200:
                             result = await response.json()
-                            logger.info(f"📄 上传响应内容: {result}")
+                            logger.info(f"📄 Kook视频上传响应: {result}")
                             
-                            if result.get('code') == 0:
-                                asset_url = result['data']['url']
-                                logger.info(f"✅ 视频上传成功: {asset_url}")
+                            # 解析Kook返回的数据结构
+                            if result.get('code') == 0 and 'data' in result:
+                                data = result['data']
                                 
-                                # 等待服务器处理视频文件
-                                logger.info(f"⏳ 等待服务器处理视频文件...")
-                                import asyncio
-                                await asyncio.sleep(15.0)  # 等待15秒让服务器处理视频
-                                logger.info(f"✅ 服务器处理完成，准备发送消息")
+                                # 提取URL - Kook可能返回不同的字段名
+                                asset_url = None
+                                if 'url' in data:
+                                    asset_url = data['url']
+                                elif 'file_url' in data:
+                                    asset_url = data['file_url']
+                                elif 'link' in data:
+                                    asset_url = data['link']
+                                elif 'asset_url' in data:
+                                    asset_url = data['asset_url']
                                 
-                                return asset_url
+                                if asset_url:
+                                    logger.info(f"✅ 视频上传成功，获得URL: {asset_url}")
+                                    
+                                    # 记录完整的返回数据用于调试
+                                    logger.debug(f"🔍 完整的Kook返回数据: {data}")
+                                    
+                                    # 等待服务器处理视频文件
+                                    logger.info(f"⏳ 等待服务器处理视频文件...")
+                                    import asyncio
+                                    await asyncio.sleep(5.0)  # 等待5秒让服务器处理视频
+                                    logger.info(f"✅ 服务器处理完成，准备发送消息")
+                                    
+                                    return asset_url
+                                else:
+                                    logger.error(f"❌ 无法从Kook响应中提取URL，数据结构: {data}")
+                                    return None
                             else:
                                 error_msg = result.get('message', '未知错误')
-                                logger.error(f"❌ 视频上传失败: {error_msg}")
+                                error_code = result.get('code', 'N/A')
+                                logger.error(f"❌ 视频上传失败 (代码: {error_code}): {error_msg}")
                                 return None
                         else:
                             response_text = await response.text()
@@ -1157,6 +1178,161 @@ class DiscordToKookForwarder(Star):
                         
         except Exception as e:
             logger.error(f"❌ 发送视频消息异常: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return False
+
+    async def _upload_and_send_image_to_kook(self, channel_id: str, image_path: str, filename: str) -> bool:
+        """上传图片到Kook并发送消息"""
+        try:
+            # 获取Kook客户端和token
+            if not self.kook_platform:
+                logger.error("❌ Kook平台实例未找到，无法发送图片")
+                return False
+            
+            kook_client = getattr(self.kook_platform, 'client', None)
+            if not kook_client:
+                logger.error("❌ 无法获取Kook客户端")
+                return False
+            
+            token = getattr(kook_client, 'token', None)
+            if not token:
+                logger.error("❌ 无法获取Kook认证token")
+                return False
+            
+            # 第一步：上传图片文件到Kook
+            logger.info(f"📤 开始上传图片文件: {image_path}")
+            image_url = await self._upload_image_to_kook_api(image_path, token)
+            if not image_url:
+                logger.error(f"❌ 图片上传失败: {filename}")
+                return False
+            
+            # 第二步：发送图片消息到频道
+            logger.info(f"📡 开始发送图片消息到频道: {channel_id}")
+            success = await self._send_image_message_to_kook(channel_id, image_url, filename, token)
+            
+            return success
+            
+        except Exception as e:
+            logger.error(f"❌ 发送图片到Kook异常: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return False
+    
+    async def _upload_image_to_kook_api(self, image_path: str, token: str) -> str:
+        """上传图片到Kook并返回URL"""
+        try:
+            # 检查文件是否存在
+            if not os.path.exists(image_path):
+                logger.error(f"❌ 图片文件不存在: {image_path}")
+                return None
+            
+            # 获取文件大小
+            file_size = os.path.getsize(image_path)
+            logger.info(f"📁 图片文件大小: {file_size} 字节 ({file_size / (1024 * 1024):.2f} MB)")
+            
+            # 构建上传URL和请求头
+            upload_url = "https://www.kookapp.cn/api/v3/asset/create"
+            headers = {'Authorization': f'Bot {token}'}
+            
+            logger.info(f"📡 发送图片上传请求到: {upload_url}")
+            
+            # 使用aiohttp上传文件
+            async with aiohttp.ClientSession() as session:
+                with open(image_path, 'rb') as f:
+                    data = aiohttp.FormData()
+                    data.add_field('file', f, filename=Path(image_path).name)
+                    
+                    async with session.post(upload_url, data=data, headers=headers) as response:
+                        logger.info(f"📥 收到图片上传响应，状态码: {response.status}")
+                        
+                        if response.status == 200:
+                            result = await response.json()
+                            logger.info(f"📄 Kook图片上传响应: {result}")
+                            
+                            # 解析Kook返回的数据结构
+                            if result.get('code') == 0 and 'data' in result:
+                                data = result['data']
+                                
+                                # 提取URL - Kook可能返回不同的字段名
+                                asset_url = None
+                                if 'url' in data:
+                                    asset_url = data['url']
+                                elif 'file_url' in data:
+                                    asset_url = data['file_url']
+                                elif 'link' in data:
+                                    asset_url = data['link']
+                                elif 'asset_url' in data:
+                                    asset_url = data['asset_url']
+                                
+                                if asset_url:
+                                    logger.info(f"✅ 图片上传成功，获得URL: {asset_url}")
+                                    
+                                    # 记录完整的返回数据用于调试
+                                    logger.debug(f"🔍 完整的Kook图片返回数据: {data}")
+                                    
+                                    return asset_url
+                                else:
+                                    logger.error(f"❌ 无法从Kook响应中提取图片URL，数据结构: {data}")
+                                    return None
+                            else:
+                                error_msg = result.get('message', '未知错误')
+                                error_code = result.get('code', 'N/A')
+                                logger.error(f"❌ 图片上传失败 (代码: {error_code}): {error_msg}")
+                                return None
+                        else:
+                            response_text = await response.text()
+                            logger.error(f"❌ 图片上传HTTP错误: {response.status}")
+                            logger.error(f"📄 错误详情: {response_text}")
+                            return None
+                            
+        except Exception as e:
+            logger.error(f"❌ 上传图片异常: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return None
+    
+    async def _send_image_message_to_kook(self, channel_id: str, image_url: str, filename: str, token: str) -> bool:
+        """发送图片消息到Kook频道"""
+        try:
+            # 构建消息发送URL和请求头
+            url = "https://www.kookapp.cn/api/v3/message/create"
+            headers = {
+                "Authorization": f"Bot {token}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "target_id": channel_id,
+                "content": image_url,
+                "type": 2  # 使用type=2发送图片消息
+            }
+            
+            logger.info(f"📡 发送图片消息到频道 {channel_id}")
+            logger.info(f"📄 消息内容: {payload}")
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, headers=headers, json=payload) as resp:
+                    logger.info(f"📥 收到图片发送响应，状态码: {resp.status}")
+                    
+                    if resp.status == 200:
+                        result = await resp.json()
+                        logger.info(f"📄 图片发送响应内容: {result}")
+                        
+                        if result.get('code') == 0:
+                            logger.info(f"✅ 发送图片消息成功: {filename}")
+                            return True
+                        else:
+                            error_msg = result.get('message', '未知错误')
+                            logger.error(f"❌ 发送图片消息失败: {error_msg}")
+                            return False
+                    else:
+                        response_text = await resp.text()
+                        logger.error(f"❌ 发送图片消息HTTP错误: {resp.status}")
+                        logger.error(f"📄 错误详情: {response_text}")
+                        return False
+                        
+        except Exception as e:
+            logger.error(f"❌ 发送图片消息异常: {e}")
             import traceback
             logger.error(traceback.format_exc())
             return False
