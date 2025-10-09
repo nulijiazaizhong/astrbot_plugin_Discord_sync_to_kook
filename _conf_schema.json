@@ -1,0 +1,59 @@
+{
+  "enabled": {
+    "type": "bool",
+    "default": true,
+    "description": "是否启用Discord到Kook消息转发功能"
+  },
+  "discord_platform_id": {
+    "type": "string",
+    "default": "",
+    "description": "Discord平台适配器ID"
+  },
+  "kook_platform_id": {
+    "type": "string",
+    "default": "",
+    "description": "Kook平台适配器ID"
+  },
+  "forward_all_channels": {
+    "type": "bool",
+    "default": false,
+    "description": "是否转发所有Discord频道的消息"
+  },
+  "default_discord_channel": {
+    "type": "string",
+    "default": "",
+    "description": "默认Discord频道ID（当关闭转发所有频道时，只转发此频道的消息）"
+  },
+  "default_kook_channel": {
+    "type": "string",
+    "default": "",
+    "description": "默认Kook频道ID（当没有特定映射时使用）"
+  },
+  "include_bot_messages": {
+    "type": "bool",
+    "default": false,
+    "description": "是否包含机器人发送的消息"
+  },
+  "message_prefix": {
+    "type": "string",
+    "default": "[Discord] ",
+    "description": "转发消息的前缀标识"
+  },
+  "image_cleanup_hours": {
+    "type": "int",
+    "default": 24,
+    "description": "图片文件自动清理时间（小时），设置为0表示不自动清理"
+  },
+  "video_cleanup_hours": {
+    "type": "int",
+    "default": 24,
+    "description": "视频文件自动清理时间（小时），设置为0表示不自动清理"
+  },
+  "channel_mappings": {
+    "type": "text",
+    "default": "",
+    "description": "多频道映射配置 - 每行一个映射，格式：Discord频道ID 空格 Kook频道ID\n例如：\n1416029491796381806 3467992097213849\n1234567890123456 9876543210987654",
+    "title": "多频道映射配置",
+    "placeholder": "请输入频道映射，每行一个，格式：Discord频道ID 空格 Kook频道ID\n例如：\n1416029491796381806 3467992097213849\n1234567890123456 9876543210987654"
+  }
+}
