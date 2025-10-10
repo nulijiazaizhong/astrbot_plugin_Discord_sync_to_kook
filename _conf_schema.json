@@ -1,59 +1,159 @@
 {
-  "enabled": {
-    "type": "bool",
-    "default": true,
-    "description": "是否启用Discord到Kook消息转发功能"
+  "forwarding": {
+    "description": "消息转发设置",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "type": "bool",
+        "default": true,
+        "description": "是否启用Discord到Kook消息转发功能",
+        "hint": "开启后将自动转发Discord消息到Kook"
+      },
+      "discord_platform_id": {
+        "type": "string",
+        "default": "",
+        "description": "Discord平台适配器ID",
+        "hint": "在AstrBot中配置的Discord平台适配器的唯一标识符"
+      },
+      "kook_platform_id": {
+        "type": "string",
+        "default": "",
+        "description": "Kook平台适配器ID",
+        "hint": "在AstrBot中配置的Kook平台适配器的唯一标识符"
+      },
+      "forward_all_channels": {
+        "type": "bool",
+        "default": false,
+        "description": "是否转发所有Discord频道的消息",
+        "hint": "开启后将转发所有Discord频道的消息，关闭则只转发指定频道"
+      },
+      "default_discord_channel": {
+        "type": "string",
+        "default": "",
+        "description": "默认Discord频道ID",
+        "hint": "当关闭转发所有频道时，只转发此频道的消息"
+      },
+      "default_kook_channel": {
+        "type": "string",
+        "default": "",
+        "description": "默认Kook频道ID",
+        "hint": "当没有特定映射时使用此频道作为目标"
+      },
+      "include_bot_messages": {
+        "type": "bool",
+        "default": false,
+        "description": "是否包含机器人发送的消息",
+        "hint": "开启后将转发其他机器人发送的消息"
+      },
+      "message_prefix": {
+        "type": "string",
+        "default": "[Discord] ",
+        "description": "转发消息的前缀标识",
+        "hint": "在转发的消息前添加此前缀以标识来源"
+      },
+      "channel_mappings": {
+        "type": "text",
+        "default": "",
+        "description": "多频道映射配置",
+        "hint": "每行一个映射，格式：Discord频道ID 空格 Kook频道ID",
+        "title": "多频道映射配置",
+        "placeholder": "请输入频道映射，每行一个，格式：Discord频道ID 空格 Kook频道ID\n例如：\n1416029491796381806 3467992097213849\n1234567890123456 9876543210987654"
+      }
+    }
   },
-  "discord_platform_id": {
-    "type": "string",
-    "default": "",
-    "description": "Discord平台适配器ID"
+  "file_management": {
+    "description": "文件管理",
+    "type": "object",
+    "items": {
+      "image_cleanup_hours": {
+        "type": "int",
+        "default": 24,
+        "description": "图片文件自动清理时间（小时）",
+        "hint": "设置为0表示不自动清理，建议设置合理的清理时间以节省存储空间"
+      },
+      "video_cleanup_hours": {
+        "type": "int",
+        "default": 24,
+        "description": "视频文件自动清理时间（小时）",
+        "hint": "设置为0表示不自动清理，建议设置合理的清理时间以节省存储空间"
+      }
+    }
   },
-  "kook_platform_id": {
-    "type": "string",
-    "default": "",
-    "description": "Kook平台适配器ID"
+  "translation": {
+    "description": "翻译功能",
+    "type": "object",
+    "items": {
+      "enable_translation": {
+        "type": "bool",
+        "default": false,
+        "description": "是否启用消息翻译功能",
+        "hint": "开启后将自动翻译转发的消息"
+      },
+      "translation_provider": {
+        "type": "string",
+        "default": "tencent",
+        "description": "翻译服务提供商",
+        "hint": "选择翻译服务提供商",
+        "options": [
+          "tencent",
+          "baidu",
+          "google"
+        ]
+      },
+      "source_language": {
+        "type": "string",
+        "default": "auto",
+        "description": "源语言代码",
+        "hint": "auto为自动检测，也可指定具体语言代码如en、ja等"
+      },
+      "target_language": {
+        "type": "string",
+        "default": "zh",
+        "description": "目标语言代码",
+        "hint": "zh为中文，en为英文，ja为日文等"
+      },
+      "translate_threshold": {
+        "type": "int",
+        "default": 10,
+        "description": "翻译阈值（字符数）",
+        "hint": "消息长度超过此值才进行翻译，避免翻译过短的消息"
+      }
+    }
   },
-  "forward_all_channels": {
-    "type": "bool",
-    "default": false,
-    "description": "是否转发所有Discord频道的消息"
-  },
-  "default_discord_channel": {
-    "type": "string",
-    "default": "",
-    "description": "默认Discord频道ID（当关闭转发所有频道时，只转发此频道的消息）"
-  },
-  "default_kook_channel": {
-    "type": "string",
-    "default": "",
-    "description": "默认Kook频道ID（当没有特定映射时使用）"
-  },
-  "include_bot_messages": {
-    "type": "bool",
-    "default": false,
-    "description": "是否包含机器人发送的消息"
-  },
-  "message_prefix": {
-    "type": "string",
-    "default": "[Discord] ",
-    "description": "转发消息的前缀标识"
-  },
-  "image_cleanup_hours": {
-    "type": "int",
-    "default": 24,
-    "description": "图片文件自动清理时间（小时），设置为0表示不自动清理"
-  },
-  "video_cleanup_hours": {
-    "type": "int",
-    "default": 24,
-    "description": "视频文件自动清理时间（小时），设置为0表示不自动清理"
-  },
-  "channel_mappings": {
-    "type": "text",
-    "default": "",
-    "description": "多频道映射配置 - 每行一个映射，格式：Discord频道ID 空格 Kook频道ID\n例如：\n1416029491796381806 3467992097213849\n1234567890123456 9876543210987654",
-    "title": "多频道映射配置",
-    "placeholder": "请输入频道映射，每行一个，格式：Discord频道ID 空格 Kook频道ID\n例如：\n1416029491796381806 3467992097213849\n1234567890123456 9876543210987654"
+  "api_keys": {
+    "description": "API密钥配置",
+    "type": "object",
+    "items": {
+      "tencent_secret_id": {
+        "type": "string",
+        "default": "",
+        "description": "腾讯云翻译API的SecretId",
+        "hint": "从腾讯云控制台获取的SecretId"
+      },
+      "tencent_secret_key": {
+        "type": "string",
+        "default": "",
+        "description": "腾讯云翻译API密钥",
+        "hint": "从腾讯云控制台获取的SecretKey"
+      },
+      "baidu_app_id": {
+        "type": "string",
+        "default": "",
+        "description": "百度翻译API的APP ID",
+        "hint": "从百度翻译开放平台获取的APP ID"
+      },
+      "baidu_secret_key": {
+        "type": "string",
+        "default": "",
+        "description": "百度翻译API的密钥",
+        "hint": "从百度翻译开放平台获取的密钥"
+      },
+      "google_api_key": {
+        "type": "string",
+        "default": "",
+        "description": "谷歌翻译API的密钥",
+        "hint": "从Google Cloud Console获取的API密钥"
+      }
+    }
   }
 }
