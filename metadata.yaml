@@ -1,0 +1,5 @@
+name: Discord_sync_to_kook # 这是你的插件的唯一识别名。
+desc: Discord消息同步到Kook插件，支持频道映射和消息格式转换 # 插件简短描述
+version: v0.0.2 # 插件版本号。格式：v1.1.1 或者 v1.1
+author: nulijiazaizhong # 作者
+repo: https://github.com/nulijiazaizhong/astrbot_plugin_Discord_sync_to_kook # 插件的仓库地址
