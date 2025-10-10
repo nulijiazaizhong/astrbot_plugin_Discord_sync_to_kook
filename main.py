@@ -152,9 +152,37 @@ class DiscordToKookForwarder(Star):
             plugin_dir = Path(__file__).parent
             config_file = plugin_dir / "config.json"
             
-            # 使用当前内存中的默认配置
+            # 创建分组结构的默认配置
+            default_config = {
+                "basic": {
+                    "enabled": self.config.get("enabled", False)
+                },
+                "forwarding": {
+                    "enabled": self.config.get("enabled", False),
+                    "discord_platform_id": self.config.get("discord_platform_id", ""),
+                    "kook_platform_id": self.config.get("kook_platform_id", ""),
+                    "forward_channels": self.config.get("forward_channels", {}),
+                    "channel_mappings": ""
+                },
+                "file_management": {
+                    "max_file_size_mb": self.config.get("max_file_size_mb", 10),
+                    "allowed_file_types": self.config.get("allowed_file_types", [".jpg", ".jpeg", ".png", ".gif", ".mp4", ".mov", ".avi", ".pdf", ".txt", ".doc", ".docx"]),
+                    "download_timeout": self.config.get("download_timeout", 30)
+                },
+                "translation": {
+                    "enabled": self.config.get("translation_enabled", False),
+                    "target_language": self.config.get("translation_target_language", "zh"),
+                    "translate_threshold": self.config.get("translation_translate_threshold", 0.8)
+                },
+                "api_keys": {
+                    "baidu_app_id": self.config.get("baidu_app_id", ""),
+                    "baidu_secret_key": self.config.get("baidu_secret_key", ""),
+                    "google_api_key": self.config.get("google_api_key", "")
+                }
+            }
+            
             with open(config_file, 'w', encoding='utf-8') as f:
-                json.dump(self.config, f, ensure_ascii=False, indent=2)
+                json.dump(default_config, f, ensure_ascii=False, indent=2)
             
             logger.info(f"✅ 已创建默认配置文件: {config_file}")
             
@@ -170,46 +198,33 @@ class DiscordToKookForwarder(Star):
             if self.plugin_config:
                 webui_config = {}
                 
-                # WebUI配置字段名映射（WebUI字段名 -> config.json字段名）
+                # WebUI配置字段名映射（支持分组结构）
                 webui_field_mapping = {
-                    # 基础配置
-                    'enabled': 'enabled',
-                    'discord_platform_id': 'discord_platform_id', 
-                    'kook_platform_id': 'kook_platform_id',
-                    'forward_channels': 'forward_channels',
-                    'forward_all_channels': 'forward_all_channels',
-                    'default_discord_channel': 'default_discord_channel',
-                    'default_kook_channel': 'default_kook_channel',
-                    'include_bot_messages': 'include_bot_messages',
-                    'message_prefix': 'message_prefix',
-                    'image_cleanup_hours': 'image_cleanup_hours',
-                    'video_cleanup_hours': 'video_cleanup_hours',
-                    'channel_mappings': 'channel_mappings',
-                    # 可能的WebUI字段名变体
-                    'enable': 'enabled',
-                    'is_enabled': 'enabled',
-                    'forward_all': 'forward_all_channels',
-                    'all_channels': 'forward_all_channels',
-                    'default_discord': 'default_discord_channel',
-                    'discord_channel': 'default_discord_channel',
-                    'default_channel': 'default_kook_channel',
-                    'kook_channel': 'default_kook_channel',
-                    'bot_messages': 'include_bot_messages',
-                    'include_bots': 'include_bot_messages',
-                    'prefix': 'message_prefix',
-                    'msg_prefix': 'message_prefix',
-                    # 翻译功能配置
-                    'enable_translation': 'enable_translation',
-                    'translation_provider': 'translation_provider',
-                    'source_language': 'source_language',
-                    'target_language': 'target_language',
-                    'tencent_secret_id': 'tencent_secret_id',
-                    'tencent_secret_key': 'tencent_secret_key',
-                    'tencent_region': 'tencent_region',
-                    'baidu_app_id': 'baidu_app_id',
-                    'baidu_secret_key': 'baidu_secret_key',
-                    'google_api_key': 'google_api_key',
-                    'translate_threshold': 'translate_threshold'
+                    # 消息转发设置
+                    'forwarding.enabled': 'enabled',
+                    'forwarding.discord_platform_id': 'discord_platform_id', 
+                    'forwarding.kook_platform_id': 'kook_platform_id',
+                    'forwarding.forward_all_channels': 'forward_all_channels',
+                    'forwarding.default_discord_channel': 'default_discord_channel',
+                    'forwarding.default_kook_channel': 'default_kook_channel',
+                    'forwarding.include_bot_messages': 'include_bot_messages',
+                    'forwarding.message_prefix': 'message_prefix',
+                    'forwarding.channel_mappings': 'channel_mappings',
+                    # 文件管理
+                    'file_management.image_cleanup_hours': 'image_cleanup_hours',
+                    'file_management.video_cleanup_hours': 'video_cleanup_hours',
+                    # 翻译功能
+                    'translation.enable_translation': 'enable_translation',
+                    'translation.translation_provider': 'translation_provider',
+                    'translation.source_language': 'source_language',
+                    'translation.target_language': 'target_language',
+                    'translation.translate_threshold': 'translate_threshold',
+                    # API密钥配置
+                    'api_keys.tencent_secret_id': 'tencent_secret_id',
+                    'api_keys.tencent_secret_key': 'tencent_secret_key',
+                    'api_keys.baidu_app_id': 'baidu_app_id',
+                    'api_keys.baidu_secret_key': 'baidu_secret_key',
+                    'api_keys.google_api_key': 'google_api_key'
                 }
                 
                 logger.info("🔍 开始读取WebUI配置...")
@@ -219,24 +234,20 @@ class DiscordToKookForwarder(Star):
                     try:
                         value = None
                         
-                        # 尝试多种方式读取配置值
-                        if hasattr(self.plugin_config, '__getitem__'):
+                        # 如果是分组配置（包含点号），尝试分组读取
+                        if '.' in webui_key:
+                            group_name, field_name = webui_key.split('.', 1)
                             try:
-                                value = self.plugin_config[webui_key]
-                            except (KeyError, TypeError):
-                                pass
-                        
-                        if value is None and hasattr(self.plugin_config, 'get'):
-                            try:
-                                value = self.plugin_config.get(webui_key)
-                            except Exception:
-                                pass
-                        
-                        if value is None and hasattr(self.plugin_config, webui_key):
-                            try:
-                                value = getattr(self.plugin_config, webui_key)
-                            except Exception:
-                                pass
+                                # 尝试从分组对象中读取
+                                if hasattr(self.plugin_config, '__getitem__'):
+                                    group_obj = self.plugin_config.get(group_name)
+                                    if group_obj and hasattr(group_obj, '__getitem__'):
+                                        value = group_obj.get(field_name)
+                                    elif group_obj and hasattr(group_obj, field_name):
+                                        value = getattr(group_obj, field_name)
+                                        
+                            except Exception as e:
+                                logger.debug(f"⚠️ 分组读取配置项 {webui_key} 失败: {e}")
                         
                         # 如果读取到有效值，添加到webui_config
                         if value is not None:
@@ -473,38 +484,56 @@ class DiscordToKookForwarder(Star):
             # 方式1：使用plugin_config对象（确保WebUI配置能够正确保存）
             if self.plugin_config:
                 try:
-                    # 更新配置对象，特别处理channel_mappings
-                    for key, value in self.config.items():
-                        # 跳过forward_channels，因为它是内部使用的
-                        if key == 'forward_channels':
-                            continue
+                    # 更新分组配置对象
+                    # 转发设置
+                    if hasattr(self.plugin_config, '__getitem__') and 'forwarding' in self.plugin_config:
+                        forwarding_group = self.plugin_config['forwarding']
+                        if hasattr(forwarding_group, '__setitem__'):
+                            forwarding_group['enabled'] = self.config.get('enabled', False)
+                            forwarding_group['discord_platform_id'] = self.config.get('discord_platform_id', '')
+                            forwarding_group['kook_platform_id'] = self.config.get('kook_platform_id', '')
+                            forwarding_group['forward_all_channels'] = self.config.get('forward_all_channels', False)
+                            forwarding_group['default_discord_channel'] = self.config.get('default_discord_channel', '')
+                            forwarding_group['default_kook_channel'] = self.config.get('default_kook_channel', '')
+                            forwarding_group['include_bot_messages'] = self.config.get('include_bot_messages', False)
+                            forwarding_group['message_prefix'] = self.config.get('message_prefix', '[Discord] ')
                             
-                        if hasattr(self.plugin_config, '__setitem__'):
-                            self.plugin_config[key] = value
-                        elif hasattr(self.plugin_config, key):
-                            setattr(self.plugin_config, key, value)
+                            # 特别处理channel_mappings - 确保WebUI能够编辑（文本格式）
+                            if 'forward_channels' in self.config and self.config['forward_channels']:
+                                mappings_lines = []
+                                for discord_id, kook_id in self.config['forward_channels'].items():
+                                    mappings_lines.append(f"{discord_id} {kook_id}")
+                                forwarding_group['channel_mappings'] = '\n'.join(mappings_lines)
+                                logger.info(f"📝 更新WebUI的channel_mappings配置: {len(mappings_lines)} 个映射")
+                            else:
+                                forwarding_group['channel_mappings'] = ""
                     
-                    # 特别处理channel_mappings - 确保WebUI能够编辑（文本格式）
-                    if 'forward_channels' in self.config and self.config['forward_channels']:
-                        mappings_lines = []
-                        for discord_id, kook_id in self.config['forward_channels'].items():
-                            mappings_lines.append(f"{discord_id} {kook_id}")
-                        
-                        mappings_text = '\n'.join(mappings_lines)
-                        
-                        # 保存到plugin_config的channel_mappings字段
-                        if hasattr(self.plugin_config, '__setitem__'):
-                            self.plugin_config['channel_mappings'] = mappings_text
-                        elif hasattr(self.plugin_config, 'channel_mappings'):
-                            setattr(self.plugin_config, 'channel_mappings', mappings_text)
-                        
-                        logger.info(f"📝 更新WebUI的channel_mappings配置: {len(mappings_lines)} 个映射")
-                    else:
-                        # 如果没有映射，设置为空字符串
-                        if hasattr(self.plugin_config, '__setitem__'):
-                            self.plugin_config['channel_mappings'] = ""
-                        elif hasattr(self.plugin_config, 'channel_mappings'):
-                            setattr(self.plugin_config, 'channel_mappings', "")
+                    # 文件管理设置
+                    if hasattr(self.plugin_config, '__getitem__') and 'file_management' in self.plugin_config:
+                        file_group = self.plugin_config['file_management']
+                        if hasattr(file_group, '__setitem__'):
+                            file_group['image_cleanup_hours'] = self.config.get('image_cleanup_hours', 24)
+                            file_group['video_cleanup_hours'] = self.config.get('video_cleanup_hours', 24)
+                    
+                    # 翻译设置
+                    if hasattr(self.plugin_config, '__getitem__') and 'translation' in self.plugin_config:
+                        translation_group = self.plugin_config['translation']
+                        if hasattr(translation_group, '__setitem__'):
+                            translation_group['enable_translation'] = self.config.get('enable_translation', False)
+                            translation_group['translation_provider'] = self.config.get('translation_provider', 'tencent')
+                            translation_group['source_language'] = self.config.get('source_language', 'auto')
+                            translation_group['target_language'] = self.config.get('target_language', 'zh')
+                            translation_group['translate_threshold'] = self.config.get('translate_threshold', 10)
+                    
+                    # API密钥设置
+                    if hasattr(self.plugin_config, '__getitem__') and 'api_keys' in self.plugin_config:
+                        api_group = self.plugin_config['api_keys']
+                        if hasattr(api_group, '__setitem__'):
+                            api_group['tencent_secret_id'] = self.config.get('tencent_secret_id', '')
+                            api_group['tencent_secret_key'] = self.config.get('tencent_secret_key', '')
+                            api_group['baidu_app_id'] = self.config.get('baidu_app_id', '')
+                            api_group['baidu_secret_key'] = self.config.get('baidu_secret_key', '')
+                            api_group['google_api_key'] = self.config.get('google_api_key', '')
                     
                     # 检查save方法是否存在且可调用
                     if hasattr(self.plugin_config, 'save') and callable(getattr(self.plugin_config, 'save', None)):
@@ -526,18 +555,41 @@ class DiscordToKookForwarder(Star):
                 plugin_dir = Path(__file__).parent
                 config_file = plugin_dir / "config.json"
                 
-                # 准备保存的配置，包含转换后的channel_mappings
-                save_config = self.config.copy()
+                # 准备保存的分组结构配置
+                save_config = {
+                    "forwarding": {
+                        "enabled": self.config.get("enabled", False),
+                        "discord_platform_id": self.config.get("discord_platform_id", ""),
+                        "kook_platform_id": self.config.get("kook_platform_id", ""),
+                        "forward_channels": self.config.get("forward_channels", {}),
+                        "channel_mappings": ""
+                    },
+                    "file_management": {
+                        "max_file_size_mb": self.config.get("max_file_size_mb", 10),
+                        "allowed_file_types": self.config.get("allowed_file_types", [".jpg", ".jpeg", ".png", ".gif", ".mp4", ".mov", ".avi", ".pdf", ".txt", ".doc", ".docx"]),
+                        "download_timeout": self.config.get("download_timeout", 30)
+                    },
+                    "translation": {
+                        "enabled": self.config.get("translation_enabled", False),
+                        "target_language": self.config.get("translation_target_language", "zh"),
+                        "translate_threshold": self.config.get("translation_translate_threshold", 0.8)
+                    },
+                    "api_keys": {
+                        "baidu_app_id": self.config.get("baidu_app_id", ""),
+                        "baidu_secret_key": self.config.get("baidu_secret_key", ""),
+                        "google_api_key": self.config.get("google_api_key", "")
+                    }
+                }
                 
                 # 将forward_channels字典转换为channel_mappings文本格式
-                if 'forward_channels' in save_config and save_config['forward_channels']:
+                if 'forward_channels' in self.config and self.config['forward_channels']:
                     mappings_lines = []
-                    for discord_id, kook_id in save_config['forward_channels'].items():
+                    for discord_id, kook_id in self.config['forward_channels'].items():
                         mappings_lines.append(f"{discord_id} {kook_id}")
-                    save_config['channel_mappings'] = '\n'.join(mappings_lines)
+                    save_config['forwarding']['channel_mappings'] = '\n'.join(mappings_lines)
                     logger.info(f"📝 转换频道映射为文本格式: {len(mappings_lines)} 个映射")
                 else:
-                    save_config['channel_mappings'] = ""
+                    save_config['forwarding']['channel_mappings'] = ""
                 
                 with open(config_file, 'w', encoding='utf-8') as f:
                     json.dump(save_config, f, ensure_ascii=False, indent=2)
