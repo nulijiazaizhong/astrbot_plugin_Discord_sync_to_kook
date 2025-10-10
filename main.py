@@ -12,6 +12,9 @@ import json
 import aiohttp
 import os
 
+# 导入翻译模块
+from .translator import TranslatorManager
+
 @register("discord_to_kook_forwarder", "AstrBot Community", "Discord消息转发到Kook插件", "1.0.0", "https://github.com/AstrBotDevs/AstrBot")
 class DiscordToKookForwarder(Star):
     def __init__(self, context: Context):
@@ -67,10 +70,24 @@ class DiscordToKookForwarder(Star):
                 "image_cleanup_hours": 24,  # 图片文件自动清理时间（小时），设置为0表示不自动清理
                 "video_cleanup_hours": 24,  # 视频文件自动清理时间（小时），设置为0表示不自动清理
                 "channel_mappings": [],  # 多频道映射配置（数组格式）
+                # 翻译功能配置
+                "enable_translation": False,
+                "translation_provider": "tencent",
+                "source_language": "auto",
+                "target_language": "zh",
+                "tencent_secret_id": "",
+                "tencent_secret_key": "",
+                "tencent_region": "ap-beijing",
+                "baidu_app_id": "",
+                "baidu_secret_key": "",
+                "google_api_key": "",
+                "translate_threshold": 10,
             }
         
         self.discord_platform = None
         self.kook_platform = None
+        # 初始化翻译管理器
+        self.translator_manager = TranslatorManager(self.config)
 
     async def initialize(self):
         """初始化插件，获取Discord和Kook平台实例"""
@@ -180,7 +197,19 @@ class DiscordToKookForwarder(Star):
                     'bot_messages': 'include_bot_messages',
                     'include_bots': 'include_bot_messages',
                     'prefix': 'message_prefix',
-                    'msg_prefix': 'message_prefix'
+                    'msg_prefix': 'message_prefix',
+                    # 翻译功能配置
+                    'enable_translation': 'enable_translation',
+                    'translation_provider': 'translation_provider',
+                    'source_language': 'source_language',
+                    'target_language': 'target_language',
+                    'tencent_secret_id': 'tencent_secret_id',
+                    'tencent_secret_key': 'tencent_secret_key',
+                    'tencent_region': 'tencent_region',
+                    'baidu_app_id': 'baidu_app_id',
+                    'baidu_secret_key': 'baidu_secret_key',
+                    'google_api_key': 'google_api_key',
+                    'translate_threshold': 'translate_threshold'
                 }
                 
                 logger.info("🔍 开始读取WebUI配置...")
@@ -255,6 +284,11 @@ class DiscordToKookForwarder(Star):
                             webui_config['forward_channels'] = {}
                     
                     self.config.update(webui_config)
+                    
+                    # 更新翻译管理器配置
+                    if self.translator_manager:
+                        self.translator_manager.update_config(self.config)
+                        logger.info("🌐 翻译管理器配置已更新")
                     
                     # 强制同步到config.json（确保WebUI配置持久化）
                     logger.info("💾 强制同步WebUI配置到config.json")
@@ -675,7 +709,42 @@ class DiscordToKookForwarder(Star):
         # 处理消息内容
         for component in event.get_messages():
             if isinstance(component, Plain):
-                message_chain.chain.append(Plain(component.text))
+                original_text = component.text
+                
+                # 添加调试日志
+                logger.info(f"🔍 检查翻译条件:")
+                logger.info(f"  - 翻译启用: {self.config.get('enable_translation', False)}")
+                logger.info(f"  - 翻译管理器存在: {self.translator_manager is not None}")
+                logger.info(f"  - 消息长度: {len(original_text.strip())} (阈值: {self.config.get('translate_threshold', 10)})")
+                logger.info(f"  - 消息内容: '{original_text[:100]}...'")
+                
+                # 检查是否需要翻译
+                if (self.config.get('enable_translation', False) and 
+                    self.translator_manager and 
+                    len(original_text.strip()) >= self.config.get('translate_threshold', 10)):
+                    
+                    logger.info("✅ 满足翻译条件，开始翻译...")
+                    try:
+                        # 执行翻译
+                        translated_text = await self.translator_manager.translate(original_text)
+                        
+                        if translated_text and translated_text != original_text:
+                            # 添加原文和译文
+                            message_chain.chain.append(Plain(f"{original_text}\n[翻译] {translated_text}"))
+                            logger.info(f"🌐 消息翻译成功: {original_text[:50]}... -> {translated_text[:50]}...")
+                        else:
+                            # 翻译失败或无变化，使用原文
+                            message_chain.chain.append(Plain(original_text))
+                            logger.info("⚠️ 翻译结果为空或与原文相同")
+                    except Exception as e:
+                        logger.error(f"❌ 翻译失败: {e}")
+                        # 翻译失败时使用原文
+                        message_chain.chain.append(Plain(original_text))
+                else:
+                    # 不需要翻译或文本太短
+                    logger.info("❌ 不满足翻译条件，使用原文")
+                    message_chain.chain.append(Plain(original_text))
+                    
             elif isinstance(component, Image):
                 # 保留图片
                 message_chain.chain.append(component)
