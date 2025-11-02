@@ -1,5 +1,8 @@
 # Discord到Kook消息转发插件
 
+> [!CAUTION]
+> 由于Astrbot的discord适配器无法识别机器人消息，所以该插件不支持转发机器人消息，如需转发机器人消息，可使用[Discord-sync-to-kook](https://github.com/nulijiazaizhong/Discord-sync-to-kook)这个项目
+
 这是一个为AstrBot开发的插件，用于将Discord平台的消息自动转发到Kook平台。
 
 ## 插件使用指南
